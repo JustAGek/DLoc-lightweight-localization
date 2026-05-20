@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(sort -k2)",
+      "WebSearch",
+      "WebFetch(domain:wcsng.ucsd.edu)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:deepakv.web.illinois.edu)",
+      "WebFetch(domain:dl.acm.org)",
+      "WebFetch(domain:dspace.mit.edu)",
+      "Bash(python3:*)",
+      "Bash(../.venv/Scripts/python.exe:*)",
+      "Bash(/c/Users/JustAGeek/DLOC/.venv/Scripts/python.exe:*)"
+    ]
+  }
+}
