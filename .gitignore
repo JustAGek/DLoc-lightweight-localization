@@ -1,5 +1,64 @@
-data/ 
-DLoc_pt_code/data/ 
-DLoc_pt_code/runs/ 
-DLoc_pt_code/__pycache__/ 
-**/*.pt 
+# ============================================================
+# DLoc project .gitignore
+# Large data, model weights, and environments live on HuggingFace
+# (JustAGeek/dloc-wild-fig10b, JustAGeek/dloc-code) — NOT in git.
+# ============================================================
+
+# ---- Python environments / caches ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# ---- Datasets (host on HuggingFace, ~tens of GB) ----
+data/
+**/data/
+raw_channels/
+*.mat
+data_split_idx/*.mat
+
+# ---- Model weights / checkpoints (host on HuggingFace) ----
+*.pt
+*.pth
+**/runs/
+**/runs_h100/
+Results/
+
+# ---- DLoc submodule heavy contents ----
+DLoc_pt_code/data/
+DLoc_pt_code/runs/
+DLoc_pt_code/__pycache__/
+
+# ---- Precomputed teacher outputs (regenerate via precompute_teacher.py) ----
+teacher_*_outputs.pt
+
+# ---- Logs / temp ----
+*.log
+hf_*.log
+
+# ---- LaTeX build artifacts (keep .tex; ignore the rest) ----
+*.aux
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.bbl
+*.blg
+docs/*.pdf
+
+# ---- Editor / OS ----
+.DS_Store
+Thumbs.db
+*.swp
+
+# ---- Skills / tooling artifacts ----
+docs/superpowers/
+
+# Old HF clone (code now lives in code/; HF repo unchanged)
+dloc_run/
+
+# Superseded scratch scripts (fixed versions in code/)
+stand alon/

@@ -1,0 +1,161 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\geometry{margin=2.4cm}
+\definecolor{accent}{RGB}{38,70,83}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=accent}
+
+\title{\vspace{-1.5em}\textbf{Document 2 --- The WILD Dataset}\\
+\large Collection, Representation, Sessions, and Splits}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\vspace{1em}\hrule\vspace{1em}
+
+%% ==================================================================
+\section{Overview}
+
+All experiments use the \textbf{WILD} dataset (\emph{WiFi-based Indoor Localization Dataset}),
+the public data released with DLoc by UC~San~Diego. WILD was collected with \textbf{MapFind}, an
+autonomous data-collection robot, and provides, for each spatial point, the CSI heard from every
+AP \emph{together with} a high-accuracy ground-truth position. This combination of fine-grained
+wireless measurements and reliable labels is what makes supervised deep localization possible.
+
+%% ==================================================================
+\section{How the data was collected: MapFind}
+
+MapFind is a TurtleBot2 carrying: a Hokuyo \textbf{LIDAR}, an Orbbec \textbf{RGB-D camera}, and a
+\textbf{Quantenna WiFi card} at phone height. As it drives the space at a constant
+$15$\,cm/s (slow enough to avoid Doppler effects), it simultaneously:
+\begin{itemize}[nosep]
+  \item maps the environment and localizes itself with SLAM (\textbf{RTAB-Map}, median ground-truth
+  error $\approx 5.7$\,cm --- validated against an HTC~Vive VR tracker), and
+  \item records timestamped CSI from every AP (each AP estimates the channel every $50$\,ms).
+\end{itemize}
+The CSI plus the SLAM position form one labelled training example. About $12{,}500$ points are
+collected per scenario; the full release spans $\sim$100k points.
+
+%% ==================================================================
+\section{Two environments, eight scenarios}
+
+WILD covers two physical spaces:
+
+\begin{table}[h]
+\centering
+\caption{The two WILD environments. This project uses the \textbf{complex (Jacobs Hall)} space.}
+\begin{tabular}{@{}lccl@{}}
+\toprule
+Environment & Area & APs & Scenarios \\
+\midrule
+Simple (Atkinson Hall)  & 500\,sq.\ ft.  & 3 & 3 (two days + one reflector) \\
+\textbf{Complex (Jacobs Hall)} & 1500\,sq.\ ft. & \textbf{4} & \textbf{5} (two times + furniture/reflector) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The complex space is harder: AP~4 is hidden behind a wall (strong NLOS) and a wall of plasma
+screens behind AP~3 creates rich multipath. \textbf{All results in this project use the four-AP
+Jacobs Hall data}; the Atkinson (3-AP) space is not used.
+
+%% ==================================================================
+\section{The five Jacobs Hall sessions}
+
+\begin{table}[h]
+\centering
+\caption{The five Jacobs Hall collection sessions used throughout the project.}
+\label{tab:sessions}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\# & Session (file stem) & Condition & Samples \\
+\midrule
+1 & \texttt{jacobs\_July28}        & standard, no furniture            & (see below) \\
+2 & \texttt{jacobs\_July28\_2}     & same setup, $\sim$1\,h later      & 17{,}574 train$^\dagger$ / 4{,}260 test \\
+3 & \texttt{jacobs\_Aug16\_1}      & random furniture added            & 11{,}201 \\
+4 & \texttt{jacobs\_Aug16\_3}      & different furniture arrangement   & 8{,}754 \\
+5 & \texttt{jacobs\_Aug16\_4\_ref} & furniture $+$ aluminium reflector & 5{,}486 \\
+\bottomrule
+\end{tabular}
+\end{table}
+{\footnotesize $^\dagger$ The standard ``Fig.\,10b'' split combines Session~1 and the training
+part of Session~2 into 17{,}574 training samples; the held-out Session~2 test set has 4{,}260
+samples.}
+
+Sessions 3--5 are captured three weeks later under progressively harder conditions and are used
+to measure \textbf{cross-session generalization} (does a model trained earlier still work after
+the room changes?). The reflector in Session~5 introduces strong specular multipath and is the
+hardest case.
+
+%% ==================================================================
+\section{Feature representation}
+
+Each training example is a stack of per-AP 2D heatmaps over the floorplan:
+\[
+\text{input} \in \mathbb{R}^{\,4 \times 161 \times 361}, \qquad
+\text{label} \in \mathbb{R}^{\,1 \times 161 \times 361},
+\]
+with a spatial resolution of \textbf{0.1\,m/pixel} spanning $16.1\,\text{m}\times36.1\,\text{m}$.
+Three arrays are stored per \texttt{.mat} file:
+
+\begin{table}[h]
+\centering
+\caption{Variables stored in each feature \texttt{.mat} file.}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Variable & Shape & Role \\
+\midrule
+\texttt{features\_w\_offset}  & $[N,4,161,361]$ & network \textbf{input} (heatmaps with ToF offset) \\
+\texttt{features\_wo\_offset} & $[N,4,161,361]$ & \textbf{target} for the consistency decoder (offset removed) \\
+\texttt{labels\_gaussian\_2d} & $[N,161,361]$   & \textbf{target} for the location decoder (Gaussian at GT) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{From CSI to heatmaps.} The MATLAB pipeline (\texttt{CSI\_to\_DLocFeatures}) converts
+each raw complex channel matrix into a 2D AoA--ToF multipath profile and projects it onto the
+physical grid:
+\begin{itemize}[nosep]
+  \item distance search grid \texttt{D\_VALS} $= -10\!:\!0.1\!:\!30$\,m,
+  \item angle search grid \texttt{THETA\_VALS} $= -\pi/2\!:\!0.01\!:\!\pi/2$,
+  \item the ground-truth label is rendered as a 2D Gaussian of spread $\sigma = 0.3$\,m at the
+  SLAM position.
+\end{itemize}
+The ``with-offset'' and ``without-offset'' versions differ only in whether the per-AP ToF offset
+has been compensated.
+
+%% ==================================================================
+\section{File format note (for reproducers)}
+
+The \texttt{.mat} files are HDF5 (MATLAB v7.3). HDF5 stores MATLAB dimensions \emph{reversed}, so
+a MATLAB array $[N,4,161,361]$ appears in Python/h5py as $[361,161,4,N]$ and must be transposed
+on load (the data loader handles this). Files are large (the Session~3 features are $\sim$15\,GB)
+because they store dense per-AP heatmaps for every sample.
+
+%% ==================================================================
+\section{How the splits are used in this project}
+
+\begin{description}[nosep,leftmargin=2.0cm,style=nextline]
+  \item[Standard split (in-distribution)] Train on Session~1 $+$ Session~2-train
+  ($17{,}574$ samples); test on Session~2-test ($4{,}260$). Used for accuracy, robustness,
+  scheduler, and multi-seed experiments.
+  \item[Initial cross-session (2-session)] Train only on the two July sessions; test on
+  Sessions 3--5. Simpler but \emph{not} comparable to the DLoc paper.
+  \item[Official cross-session (leave-one-session-out)] Train on three setups (the two July
+  sessions $+$ two of the three August sessions) and test on the held-out August session ---
+  identical to the DLoc paper's Table~1. Used for the final, fair comparison.
+\end{description}
+
+\paragraph{Hosting.} The processed feature \texttt{.mat} files and the trained weights are
+archived on HuggingFace (\texttt{JustAGeek/dloc-wild-fig10b} for data,
+\texttt{JustAGeek/dloc-code} for code/weights/results); raw channel matrices are kept locally.
+The experiments that consume these splits are described in \texttt{04\_experiments}.
+
+\end{document}

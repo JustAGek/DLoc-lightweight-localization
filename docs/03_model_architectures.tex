@@ -1,0 +1,205 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\geometry{margin=2.3cm}
+\definecolor{accent}{RGB}{38,70,83}
+\definecolor{ours}{RGB}{42,157,143}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=accent}
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+\title{\vspace{-1.5em}\textbf{Document 3 --- Model Architectures}\\
+\large Lightweight Students, the U-Net Variant, and the Mamba Variant}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\vspace{1em}\hrule\vspace{1em}
+
+All models map the same input/output: $[B,4,161,361]\!\to\![B,1,161,361]$, a 4-AP heatmap stack
+to a single location heatmap, finished with a Sigmoid. They differ only in \emph{how} they
+compress and reconstruct the spatial information. Table~\ref{tab:summary} summarizes the family;
+the sections that follow give layer-level detail.
+
+\begin{table}[h]
+\centering
+\caption{Model family. Compression is relative to the 16.5\,M-parameter DLoc teacher.}
+\label{tab:summary}
+\begin{tabular}{@{}lrrl@{}}
+\toprule
+Model & Parameters & Compression & One-line idea \\
+\midrule
+DLoc baseline (teacher) & 16.5\,M & $1\times$   & ResNet encoder $+$ 2 decoders \\
+MobileNetV2 student     & 2.30\,M & $7.2\times$ & MobileNetV2 encoder $+$ upsample decoder \\
+TinyCNN student         & 47\,K   & $351\times$ & 3 tiny conv blocks $+$ transpose-conv decoder \\
+MobileNetV2-UNet        & 2.41\,M & $6.8\times$ & MobileNetV2 encoder $+$ U-Net skip connections \\
+Mamba variant           & 653\,K  & $25\times$  & CNN stem $+$ 4 state-space blocks $+$ CNN decoder \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%% ==================================================================
+\section{Baseline (teacher) --- recap}
+
+The teacher is the original DLoc \code{Enc\_2Dec\_Network}: a 6-block ResNet encoder, a 9-block
+location decoder, and a 12-block consistency decoder, all with InstanceNorm
+($\approx16.5$\,M parameters). It is described fully in \texttt{01\_dloc\_architecture}. In the
+distillation experiments it acts as the \emph{teacher}; its location-decoder output is the soft
+target for the students.
+
+%% ==================================================================
+\section{MobileNetV2 student}
+
+\textbf{Idea.} Replace the heavy ResNet encoder with a pretrained \textbf{MobileNetV2} backbone
+(depthwise-separable convolutions $+$ inverted residual blocks), and decode with a lightweight
+upsample-and-convolve head. The first convolution is widened from 3 (RGB) to 4 (AP) input
+channels; ImageNet-pretrained weights initialize the rest.
+
+\begin{table}[h]
+\centering
+\caption{MobileNetV2 student (\code{student\_mobilenet.py}). Encoder $=$ \code{mobilenet.features[:-1]}.}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Stage & Operation & Output \\
+\midrule
+Input        & 4-channel heatmaps                                   & $[4,161,361]$ \\
+Encoder      & MobileNetV2 features (first conv $4\!\to\!32$)       & $[320, \sim\!6, \sim\!12]$ \\
+Decoder 1    & Upsample$\times2$, Conv$(320\!\to\!128)$, BN, ReLU   & \\
+Decoder 2    & Upsample$\times2$, Conv$(128\!\to\!64)$, BN, ReLU    & \\
+Decoder 3    & Upsample$\times2$, Conv$(64\!\to\!32)$, BN, ReLU     & \\
+Head         & Conv$1\times1\,(32\!\to\!1)$, Sigmoid                & \\
+Resize       & Bilinear interpolate to $(161,361)$                 & $[1,161,361]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Rationale \& result.} Depthwise-separable convolutions factor a standard convolution into
+a per-channel spatial filter plus a $1\times1$ mixing convolution, cutting compute by roughly the
+kernel area. The model has $2.3$\,M parameters yet matches the teacher's in-distribution accuracy
+($0.707$\,m) --- empirical evidence that DLoc is over-parameterized for this task. \textbf{Limitation:}
+all spatial detail must pass through the low-resolution bottleneck, which the U-Net variant fixes.
+
+%% ==================================================================
+\section{TinyCNN student}
+
+\textbf{Idea.} An intentionally minimal network to probe the \emph{capacity floor} of the task.
+It uses one standard input convolution and then depthwise-separable blocks, downsampling twice
+and upsampling twice.
+
+\begin{table}[h]
+\centering
+\caption{TinyCNN student (\code{student\_tinycnn.py}). DWS $=$ depthwise-separable conv.}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Stage & Operation & Output \\
+\midrule
+Block 1 & Conv$(4\!\to\!16)$, BN, ReLU; DWS$(16\!\to\!16)$; MaxPool$\times2$ & $[16, H/2, W/2]$ \\
+Block 2 & DWS$(16\!\to\!32)$; DWS$(32\!\to\!32)$; MaxPool$\times2$           & $[32, H/4, W/4]$ \\
+Block 3 & DWS$(32\!\to\!64)$                                                 & $[64, H/4, W/4]$ \\
+Dec 1   & ConvTranspose$(64\!\to\!32,\,s{=}2)$, BN, ReLU                     & $[32, H/2, W/2]$ \\
+Dec 2   & ConvTranspose$(32\!\to\!16,\,s{=}2)$, BN, ReLU                     & $[16, H, W]$ \\
+Head    & Conv$1\times1\,(16\!\to\!1)$, Sigmoid; resize to $(161,361)$       & $[1,161,361]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Result.} With only $47$\,K parameters TinyCNN reaches just $3.9$\,m median error --- it
+\emph{cannot} learn both per-AP spectral feature extraction and cross-AP triangulation. It
+establishes a capacity floor of $\sim$2\,M parameters and, importantly, is the model on which
+\emph{distillation backfires} (Document~4).
+
+%% ==================================================================
+\section{MobileNetV2-UNet (the headline model)}
+
+\textbf{Idea.} Keep the efficient MobileNetV2 encoder but add \textbf{U-Net skip connections}: the
+encoder is split at four resolution stages and each is concatenated into the matching decoder
+stage. This bypasses the information bottleneck, letting fine spatial detail from early layers
+reach the output directly.
+
+\begin{table}[h]
+\centering
+\caption{MobileNetV2-UNet (\code{student\_unet.py}), $2.41$\,M parameters.}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Stage & Operation & Skip out \\
+\midrule
+\code{inc}   & Conv$(4\!\to\!32,\,s{=}2)$, BN, ReLU6                              & --- \\
+\code{enc1}  & MobileNetV2 \code{features[1:4]}                                   & 24\,ch (skip 1) \\
+\code{enc2}  & MobileNetV2 \code{features[4:7]}                                   & 32\,ch (skip 2) \\
+\code{enc3}  & MobileNetV2 \code{features[7:14]}                                  & 96\,ch (skip 3) \\
+\code{enc4}  & MobileNetV2 \code{features[14:-1]} (bottleneck)                    & 320\,ch \\
+\code{dec1}  & Up$\times2$; concat skip 3; Conv$(320{+}96\!\to\!128)$, BN, ReLU   & \\
+\code{dec2}  & Up$\times2$; concat skip 2; Conv$(128{+}32\!\to\!64)$, BN, ReLU    & \\
+\code{dec3}  & Up$\times2$; concat skip 1; Conv$(64{+}24\!\to\!32)$, BN, ReLU     & \\
+Head         & Conv$1\times1\,(32\!\to\!1)$, Sigmoid; resize to $(161,361)$       & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Why it wins.} In a plain encoder--decoder, all spatial information is squeezed through a
+low-dimensional bottleneck that discards the high-frequency detail needed for sub-metre peaks.
+The skip connections re-inject encoder feature maps at three resolutions, so the decoder can
+reconstruct a \emph{sharper} Gaussian peak. This yields the best in-distribution accuracy of the
+family ($0.640$\,m, a $9.5\%$ improvement over the plain MobileNetV2 student) and, as a bonus,
+the best noise robustness (the skip paths route around noise-corrupted bottleneck features).
+
+%% ==================================================================
+\section{Mamba variant (exploratory)}
+
+\textbf{Idea.} Replace the ResNet bottleneck with \textbf{Mamba} selective state-space (S6) blocks
+for efficient long-range sequence modelling: a CNN stem extracts local features, the 2D feature
+map is flattened to a token sequence, four Mamba blocks model global relationships, and a CNN
+decoder reconstructs the heatmap.
+
+\begin{table}[h]
+\centering
+\caption{Mamba-DLoc (\code{mamba\_model.py}), $653$\,K parameters.}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Stage & Operation & Output \\
+\midrule
+Stem    & Conv$(4\!\to\!32)$; Conv$(32\!\to\!64,s{=}2)$; Conv$(64\!\to\!128,s{=}2)$ & $[128,41,91]$ \\
+Tokenize& flatten spatial $\to$ sequence                                            & $[3731,128]$ \\
+Core    & $4\times$ \{LayerNorm $\to$ Mamba(S6) $\to$ residual\}                     & $[3731,128]$ \\
+Reshape & sequence $\to$ spatial                                                     & $[128,41,91]$ \\
+Decoder & interp $\to$ Conv$(128\!\to\!64)$; interp $\to$ Conv$(64\!\to\!32)$        & $[32,161,361]$ \\
+Head    & Conv$1\times1\,(32\!\to\!1)$, Sigmoid                                      & $[1,161,361]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Each Mamba block is a selective scan: input projection, a causal depthwise Conv1d, input-dependent
+SSM parameters $(\Delta, B, C)$, a discretized linear recurrence
+$h_t = \bar{A}h_{t-1} + \bar{B}x_t,\; y_t = C h_t$, a skip term $D$, and a SiLU gate.
+\textbf{Outcome.} The variant \emph{diverged} ($\sim$10.6\,m median): flattening a 2D heatmap into
+a 1D sequence destroys spatial locality, and the model is unstable without LR warm-up and gradient
+clipping. It is documented for completeness and as future work.
+
+%% ==================================================================
+\section{Knowledge distillation setup}
+
+For the students, distillation transfers the teacher's ``soft'' spatial knowledge. To avoid
+running the heavy teacher during student training, teacher outputs are \textbf{pre-computed once}
+(\code{precompute\_teacher.py}, $\sim$5\,GB cached) and reused. The student loss mixes a
+ground-truth term and a teacher-matching term:
+\begin{equation}
+\mathcal{L} \;=\; \alpha\,\text{MSE}(\hat{y},\,y)\;+\;\beta\,\text{MSE}(\hat{y},\,y_T),
+\qquad \alpha = 0.7,\;\; \beta = 0.3,
+\end{equation}
+where $\hat y$ is the student output, $y$ the ground-truth heatmap, and $y_T$ the teacher's
+output. The teacher's heatmap is \emph{broader} than the delta-like ground truth, so the second
+term acts as \emph{spatial label smoothing}. Document~4 shows this helps robustness (not
+in-distribution accuracy) and, below a capacity threshold, can hurt.
+
+\paragraph{Training recipes (summary).} Students: Adam, lr $10^{-4}$, batch 64, 50 epochs.
+U-Net: 120 epochs with cosine annealing. Baseline: its native schedule (StepLR, $\gamma=0.9$).
+Best checkpoint is selected by minimum test-median error.
+
+\end{document}

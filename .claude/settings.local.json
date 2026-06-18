@@ -11,7 +11,29 @@
       "WebFetch(domain:dspace.mit.edu)",
       "Bash(python3:*)",
       "Bash(../.venv/Scripts/python.exe:*)",
-      "Bash(/c/Users/JustAGeek/DLOC/.venv/Scripts/python.exe:*)"
+      "Bash(/c/Users/JustAGeek/DLOC/.venv/Scripts/python.exe:*)",
+      "Bash(python:*)",
+      "Bash(ssh:*)",
+      "Bash(/c/Users/JustAGeek/DLOC/.venv/Scripts/python:*)",
+      "Bash(huggingface-cli whoami:*)",
+      "Bash(hf auth:*)",
+      "Bash(hf upload:*)",
+      "Bash(gh auth:*)",
+      "Bash(gh repo:*)",
+      "Bash(scp:*)",
+      "Bash(where python:*)",
+      "Bash(conda:*)",
+      "Bash(git config:*)",
+      "Bash(pdflatex -interaction=nonstopmode phase2_results.tex)",
+      "PowerShell(Get-Command *)",
+      "Bash(python -c ' *)",
+      "Read(//tmp/**)",
+      "Read(//c/c/Users/JustAGeek/DLOC/**)",
+      "Read(//c/c/Users/JustAGeek/DLOC/DLoc_pt_code-main/**)",
+      "Read(//c/c/Users/JustAGeek/**)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(awk '{print $9, $5\"B\"}')",
+      "Bash(awk '{print $1, $NF}')"
     ]
   }
 }

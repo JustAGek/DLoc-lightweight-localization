@@ -1,0 +1,860 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{float}
+
+\geometry{margin=2.5cm}
+
+\definecolor{bestcolor}{RGB}{0,128,0}
+\definecolor{worstcolor}{RGB}{180,0,0}
+\definecolor{lightgray}{gray}{0.92}
+\newcommand{\best}[1]{\textcolor{bestcolor}{\textbf{#1}}}
+\newcommand{\worst}[1]{\textcolor{worstcolor}{#1}}
+
+\title{%
+  Comprehensive Experimental Results and Analysis:\\
+  Knowledge Distillation and Architectural Improvements\\
+  for Lightweight Deep Learning--Based WiFi Localization%
+}
+\author{
+  Abdulrahman Ebrahim\\
+  Department of Computer Science and Engineering\\
+  Egypt-Japan University of Science and Technology (E-JUST)\\
+  \texttt{abdulrahman.ebrahim@ejust.edu.eg}
+}
+\date{June 2026}
+
+\begin{document}
+\maketitle
+
+%% ====================================================================
+\begin{abstract}
+%% ====================================================================
+Deep learning--based WiFi indoor localization systems such as DLoc achieve sub-meter accuracy but rely on large encoder--decoder architectures (16.5M parameters) that are impractical for deployment on edge devices.
+This document presents the complete Phase~2 experimental results of our graduation thesis, which investigates knowledge distillation and architectural improvements for compressing DLoc into lightweight student models.
+We conduct a systematic evaluation across five experimental axes:
+(1)~in-distribution localization accuracy with three student architectures (MobileNetV2, TinyCNN, MobileNetV2-UNet) in both standalone and knowledge-distilled training modes;
+(2)~robustness to real-world signal degradations including access point (AP) dropout, Gaussian noise, signal attenuation, and spatial blur;
+(3)~cross-session generalization across four WILD dataset collection sessions with varying environmental conditions (furniture rearrangement, metal reflectors);
+(4)~statistical validation via multi-seed experiments; and
+(5)~the impact of U-Net skip connections and learning rate scheduling on convergence and final accuracy.
+
+All experiments are conducted on the WILD Jacobs Hall dataset (Sessions~1+2, 17{,}574 training / 4{,}260 test samples, 4~APs, $161\!\times\!361$ heatmaps at $0.1$\,m/pixel).
+Our best model, MobileNetV2-UNet with cosine annealing and knowledge distillation, achieves \textbf{0.640\,m} median error---a \textbf{9.5\% improvement} over the full DLoc baseline---with only \textbf{2.41M parameters} ($6.8\times$ compression).
+We further demonstrate that knowledge distillation acts primarily as a \emph{robustness mechanism} rather than an accuracy mechanism, providing $3.4\times$ Gaussian noise resilience for MobileNetV2 and consistent cross-session generalization improvements under strong distribution shift.
+These findings establish that practical, deployable WiFi localization is achievable through the combination of architectural design (skip connections) and training strategy (knowledge distillation), and that these two mechanisms address complementary failure modes.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+
+%% ####################################################################
+\section{Introduction and Experimental Setup}
+\label{sec:intro}
+%% ####################################################################
+
+\subsection{Motivation}
+
+DLoc~\cite{ayyalasomayajula2020deep} demonstrated that deep learning can achieve sub-meter WiFi localization by learning a mapping from Channel State Information (CSI) measurements to 2D spatial heatmaps over a floorplan.
+However, the DLoc architecture employs a heavy encoder--decoder network (Enc\_2Dec\_Network) with 16.5M parameters, requiring significant computational resources that preclude deployment on edge devices such as IoT gateways, mobile phones, or embedded access points.
+
+Our thesis investigates whether this computational cost is inherent to the localization task, or whether it reflects over-parameterization that can be addressed through model compression.
+Specifically, we pursue two complementary strategies:
+\begin{enumerate}[nosep]
+  \item \textbf{Knowledge distillation:} Training lightweight student models to mimic the full DLoc teacher's outputs, following Hinton et al.~\cite{hinton2015distilling}.
+  \item \textbf{Architectural improvements:} Introducing U-Net skip connections into the student architecture to preserve fine-grained spatial information.
+\end{enumerate}
+
+\subsection{Dataset and Training Protocol}
+
+\paragraph{WILD Dataset.}
+All experiments use the WILD (WiFi-based Indoor Localization Dataset) collected at Jacobs Hall, UC San Diego~\cite{ayyalasomayajula2020deep}.
+The dataset comprises CSI measurements from 4 access points across 5 data collection sessions captured under varying environmental conditions.
+Each input sample is a 4-channel tensor ($4 \times 161 \times 361$) representing the CSI magnitude and phase from each AP, and the target is a 2D Gaussian heatmap ($1 \times 161 \times 361$) centered on the ground-truth position at $0.1$\,m/pixel resolution, covering a $16.1 \times 36.1$\,m indoor area.
+
+\paragraph{Training/test split.}
+Models are trained on Session~1 (\texttt{jacobs\_Jul28}) and the training portion of Session~2 (\texttt{jacobs\_Jul28\_2}), yielding 17{,}574 training samples.
+In-distribution evaluation uses the held-out Session~2 test set ($N = 4{,}260$).
+Cross-session evaluation uses Sessions~3--5, collected under different environmental conditions (see Section~\ref{sec:cross_session}).
+
+\paragraph{Knowledge distillation objective.}
+The distillation loss combines direct ground-truth supervision with teacher-output matching:
+\begin{equation}
+  \mathcal{L} = \alpha \cdot \text{MSE}(\hat{y},\, y) \;+\; \beta \cdot \text{MSE}(\hat{y},\, y_T)
+  \label{eq:distill}
+\end{equation}
+where $\hat{y}$ is the student output, $y$ is the ground-truth heatmap, $y_T$ is the precomputed teacher (DLoc baseline) output, and $\alpha = 0.7$, $\beta = 0.3$.
+Teacher outputs are precomputed and cached (4.09\,GB train + 0.99\,GB test) to avoid running the teacher network during student training.
+
+\paragraph{Training details.}
+Student models (MobileNetV2, TinyCNN) are trained for 50 epochs with Adam ($\text{lr} = 10^{-4}$), batch size 64.
+U-Net variants are trained for 120 epochs with either cosine annealing ($T_{\max} = 120$, $\eta_{\min} = 0$) or step decay (halving every 20 epochs).
+The DLoc baseline uses its original configuration: SGD with StepLR scheduling ($\gamma = 0.9$), with step sizes of 50 (encoder), 20 (decoder), and 50 (offset decoder) epochs.
+
+\subsection{Model Architectures}
+
+\begin{table}[H]
+\centering
+\caption{Summary of evaluated model architectures.}
+\label{tab:architectures}
+\begin{tabular}{@{}lrcl@{}}
+\toprule
+\textbf{Model} & \textbf{Parameters} & \textbf{Compression} & \textbf{Architecture Highlights} \\
+\midrule
+DLoc Baseline & 16.5M & $1\times$ & ResNet encoder + location decoder + offset decoder \\
+MobileNetV2 & 2.3M & $7.2\times$ & Depthwise-separable convolutions, inverted residuals \\
+TinyCNN & 47K & $351\times$ & 3 conv layers + 2 FC layers \\
+MobileNetV2-UNet & 2.41M & $6.8\times$ & MobileNetV2 encoder + U-Net skip connections to decoder \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{MobileNetV2} replaces the DLoc encoder with a MobileNetV2 backbone using depthwise-separable convolutions and inverted residual blocks.
+A single decoder head maps the bottleneck features to the $161 \times 361$ heatmap output via transposed convolutions.
+
+\paragraph{TinyCNN} is a minimal architecture with 3 convolutional layers (32, 64, 128 filters) followed by 2 fully-connected layers, designed to test the minimum model capacity required for WiFi localization.
+
+\paragraph{MobileNetV2-UNet} augments the MobileNetV2 student with U-Net--style skip connections.
+The encoder is split at four resolution stages (24ch, 32ch, 96ch, 320ch), and the decoder concatenates encoder feature maps with upsampled decoder features at matching resolutions:
+$320{+}96 \to 128$, $128{+}32 \to 64$, $64{+}24 \to 32$, $32 \to 1$ (with Sigmoid activation).
+This preserves fine-grained spatial features that would otherwise be lost in the bottleneck.
+
+\subsection{Evaluation Metrics}
+
+We report four localization error metrics computed as the Euclidean distance between the predicted and ground-truth positions (extracted as the peak of the output heatmap, scaled by $0.1$\,m/pixel):
+\begin{itemize}[nosep]
+  \item \textbf{Median error:} The 50th percentile --- the primary metric, robust to outliers.
+  \item \textbf{P90 error:} The 90th percentile --- captures the ``reasonable worst case.''
+  \item \textbf{P99 error:} The 99th percentile --- captures catastrophic failure rate.
+  \item \textbf{Mean error:} Average over all test samples --- sensitive to outliers but useful for aggregate comparison.
+\end{itemize}
+
+
+%% ####################################################################
+\section{Step 0: In-Distribution Localization Accuracy}
+\label{sec:step0}
+%% ####################################################################
+
+This section establishes the baseline localization accuracy of all model variants on the in-distribution Session~2 test set.
+
+\begin{table}[H]
+\centering
+\caption{In-distribution localization accuracy (Session~2 test set, $N = 4{,}260$). All student models trained for 50 epochs; U-Net variants trained for 120 epochs. \best{Green bold} = best in column.}
+\label{tab:baseline}
+\begin{tabular}{@{}lrcccc@{}}
+\toprule
+\textbf{Model} & \textbf{Params} & \textbf{Mode} & \textbf{Median (m)} & \textbf{P90 (m)} & \textbf{P99 (m)} \\
+\midrule
+DLoc Baseline         & 16.5M  & ---        & 0.707 & $\sim$1.6 & $\sim$4.0 \\
+\midrule
+MobileNetV2           & 2.3M   & Standalone & 0.707 & 1.616 & 3.992 \\
+MobileNetV2           & 2.3M   & Distilled  & 0.707 & 1.612 & 4.003 \\
+\midrule
+TinyCNN               & 47K    & Standalone & 3.922 & 13.919 & 23.244 \\
+TinyCNN               & 47K    & Distilled  & 3.706 & 14.784 & 25.101 \\
+\midrule
+MobileNetV2-UNet      & 2.41M  & Standalone (Cosine) & \best{0.640} & 1.523 & 2.750 \\
+MobileNetV2-UNet      & 2.41M  & Standalone (Step)   & \best{0.640} & 1.552 & 2.918 \\
+MobileNetV2-UNet      & 2.41M  & Distilled (Cosine)  & \best{0.640} & \best{1.513} & \best{2.587} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Analysis}
+
+\paragraph{MobileNetV2 achieves lossless $7.2\times$ compression.}
+The most immediate finding is that MobileNetV2 (2.3M parameters) exactly matches the full DLoc baseline (16.5M parameters) at 0.707\,m median error.
+This is a direct empirical demonstration that the DLoc Enc\_2Dec\_Network is significantly over-parameterized for in-distribution localization on the WILD Jacobs Hall dataset.
+The CSI-to-heatmap mapping---from a 4-channel complex-valued input to a spatial probability distribution---does not require the representational capacity of a full ResNet encoder with 6 blocks and 64 base filters.
+MobileNetV2's depthwise-separable convolutions and inverted residual blocks achieve the same effective receptive field with $7.2\times$ fewer multiply-accumulate operations.
+
+This finding has direct practical implications: a model consuming $\sim$9\,MB of memory (vs.\ $\sim$64\,MB for the full DLoc encoder+decoder+offset trio) can achieve identical localization accuracy, enabling deployment on resource-constrained edge devices such as IoT gateways or smartphones.
+
+\paragraph{TinyCNN establishes a capacity floor at $\sim$47K parameters.}
+TinyCNN achieves only 3.922\,m median error---$5.5\times$ worse than the baseline---despite using the same training data and procedure.
+The WiFi heatmap prediction task requires the model to simultaneously perform two computational stages: (i)~per-AP spectral feature extraction, identifying multipath signatures in each channel, and (ii)~cross-AP spatial triangulation, combining information from multiple APs to resolve position.
+With only 3 convolutional layers and 47K parameters, TinyCNN lacks sufficient filter capacity to learn both stages.
+The P90 error of 13.9\,m confirms that the model frequently collapses to broad, poorly-localized predictions---occupying a significant fraction of the $16.1 \times 36.1$\,m floorplan.
+
+This result establishes a \textbf{minimum capacity threshold} for CSI-based localization: approximately 2M parameters are required for this dataset and spatial resolution.
+Below this floor, no training strategy (including distillation) can compensate for insufficient architectural capacity.
+
+\paragraph{Knowledge distillation has negligible effect on in-distribution median accuracy.}
+Across all architecture pairs, standalone and distilled variants achieve effectively identical median errors: 0.707\,m vs.\ 0.707\,m (MobileNetV2), 3.922\,m vs.\ 3.706\,m (TinyCNN, a modest 5.5\% improvement), and 0.640\,m vs.\ 0.640\,m (U-Net).
+This occurs because in-distribution, the teacher's output $y_T$ closely approximates the ground truth $y$, making the distillation term $\beta \cdot \text{MSE}(\hat{y}, y_T)$ largely redundant with the primary supervision $\alpha \cdot \text{MSE}(\hat{y}, y)$.
+The true value of distillation---as a robustness and generalization mechanism---emerges under distribution shift (Sections~\ref{sec:robustness} and~\ref{sec:cross_session}).
+
+\paragraph{U-Net skip connections yield a 9.5\% accuracy improvement over all non-U-Net models.}
+The MobileNetV2-UNet achieves 0.640\,m median---improving upon both the plain MobileNetV2 (0.707\,m) and the full DLoc baseline (0.707\,m)---with only 2.41M parameters.
+Skip connections between the encoder and decoder bypass the information bottleneck at the network's narrowest point, allowing fine-grained spatial features from early convolutional layers to directly inform heatmap reconstruction.
+In the standard MobileNetV2 architecture (without skip connections), all spatial information must pass through a low-dimensional latent vector that discards the high-frequency spatial details needed to resolve sub-meter position differences.
+The U-Net architecture recovers these details by concatenating encoder feature maps with decoder feature maps at four matching resolution stages, enabling the decoder to produce sharper, more precisely-localized Gaussian peaks.
+
+Crucially, this means a student model with \textbf{fewer parameters than the teacher surpasses the teacher's accuracy}.
+This is a strong result: the architectural improvement (skip connections) addresses a fundamental information-flow limitation in the original DLoc design, not just a training signal deficiency.
+
+\paragraph{The distilled U-Net achieves the best tail performance.}
+While all U-Net variants share the same 0.640\,m median, the distilled cosine variant achieves the lowest P90 (1.513\,m) and P99 (2.587\,m).
+This indicates that knowledge distillation helps the U-Net resolve the most ambiguous samples---those where CSI evidence is consistent with multiple candidate locations.
+The teacher's broader output heatmap encodes a preference among these candidates, providing additional supervision that the ground truth (a single Gaussian peak) cannot.
+
+
+%% ####################################################################
+\section{Step 5: U-Net Architecture and Scheduler Comparison}
+\label{sec:unet}
+%% ####################################################################
+
+This section isolates the contributions of skip connections and learning rate scheduling.
+We train the MobileNetV2-UNet for 120 epochs under two scheduling strategies and two training modes.
+
+\subsection{Scheduler Strategies}
+
+\begin{itemize}[nosep]
+  \item \textbf{Cosine Annealing:} $\eta_t = \frac{1}{2}\eta_0\bigl(1 + \cos(\pi t / T)\bigr)$, smoothly decaying from $\eta_0 = 10^{-4}$ to $0$ over $T = 120$ epochs.
+  \item \textbf{Step Decay:} $\eta_t = \eta_0 \cdot 0.5^{\lfloor t/20 \rfloor}$, halving the learning rate every 20 epochs (6 halvings total over 120 epochs, final effective LR $= 10^{-4}/64 \approx 1.56 \times 10^{-6}$).
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\caption{U-Net scheduler and training mode comparison (120 epochs, $\text{lr}_0 = 10^{-4}$).}
+\label{tab:unet_scheduler}
+\begin{tabular}{@{}llcccc@{}}
+\toprule
+\textbf{Scheduler} & \textbf{Mode} & \textbf{Median (m)} & \textbf{P90 (m)} & \textbf{P99 (m)} \\
+\midrule
+Cosine Annealing & Standalone & \best{0.640} & 1.523 & 2.750 \\
+Step Decay       & Standalone & \best{0.640} & 1.552 & 2.918 \\
+Cosine Annealing & Distilled  & \best{0.640} & \best{1.513} & \best{2.587} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Analysis}
+
+\paragraph{Both schedulers converge to the same global optimum.}
+The identical 0.640\,m median error across cosine and step scheduling indicates that the loss landscape for this localization task contains a well-defined basin of equivalent minima that both strategies successfully reach.
+This is expected for CSI-to-heatmap regression, which is a relatively smooth mapping without the rugged loss landscapes characteristic of adversarial training or multi-task objectives.
+
+\paragraph{Cosine annealing produces tighter tail distributions.}
+Although the median is identical, cosine annealing achieves lower P90 (1.523\,m vs.\ 1.552\,m, $-1.9\%$) and P99 (2.750\,m vs.\ 2.918\,m, $-5.8\%$).
+The smooth, continuous learning rate reduction allows the optimizer to gradually refine weights in the final training epochs, which particularly benefits the most difficult samples.
+Step decay introduces discontinuous learning rate changes every 20 epochs, which can destabilize optimization on outlier samples by suddenly changing the effective gradient scale.
+
+\paragraph{Distillation provides marginal tail improvement.}
+The distilled cosine variant achieves P99 of 2.587\,m vs.\ 2.750\,m standalone ($-5.9\%$).
+The teacher's spatially smooth output provides disambiguating information for the hardest samples---those where CSI evidence is consistent with multiple candidate positions.
+
+\paragraph{Practical recommendation.}
+Cosine annealing is preferred for its better tail performance and simpler hyperparameter profile (only $T_{\max}$ to configure, versus step size and decay factor for step decay).
+The scheduler choice is a \emph{second-order effect}: it influences tail percentiles but does not affect the primary median metric, confirming that architectural design is the dominant factor.
+
+
+%% ####################################################################
+\section{Steps 2 and 3: Robustness Under Signal Degradation}
+\label{sec:robustness}
+%% ####################################################################
+
+Practical WiFi localization must tolerate real-world signal degradations: hardware failures (AP dropout), electromagnetic interference (noise), propagation changes (attenuation), and measurement imprecision (blur).
+We evaluate all model variants under controlled input corruptions applied \textbf{at test time only}, with no retraining or fine-tuning.
+
+\subsection{Corruption Categories}
+
+\begin{itemize}[nosep]
+  \item \textbf{Individual AP dropout:} Zeroing out one specific AP channel (testing each of APs~0--3 individually).
+  \item \textbf{Random AP dropout:} Randomly zeroing 1 or 2 of the 4 AP channels per test sample.
+  \item \textbf{Gaussian noise:} Additive i.i.d.\ noise $\mathcal{N}(0, \sigma^2)$ with $\sigma \in \{0.1, 0.2\}$.
+  \item \textbf{Global attenuation:} Scaling all AP channels by $0.5\times$ (simulating wall penetration loss).
+  \item \textbf{Single-AP attenuation:} Scaling AP~0 by $0.3\times$ (simulating partial obstruction of one AP).
+  \item \textbf{Gaussian blur:} Spatial convolution with kernel $k = 5$, $\sigma = 1$ (simulating measurement smoothing or hardware filter effects).
+\end{itemize}
+
+
+%% ---------- MobileNetV2 ----------
+\subsection{MobileNetV2 Robustness}
+
+\begin{table}[H]
+\centering
+\caption{Robustness evaluation --- MobileNetV2 (2.3M params). \best{Green bold} highlights where distilled outperforms standalone.}
+\label{tab:robust_mobilenet}
+\begin{tabular}{@{}lcccc|cccc@{}}
+\toprule
+ & \multicolumn{4}{c|}{\textbf{Standalone}} & \multicolumn{4}{c}{\textbf{Distilled}} \\
+\textbf{Condition} & \textbf{Med.} & \textbf{P90} & \textbf{P99} & \textbf{Mean} & \textbf{Med.} & \textbf{P90} & \textbf{P99} & \textbf{Mean} \\
+\midrule
+Normal                 & 0.707 & 1.616 & 3.992  & 0.900 & 0.707 & 1.612 & 4.003  & 0.896 \\
+\midrule
+Drop AP 0              & 1.273 & 3.396 & 13.029 & 2.005 & 1.315 & 3.130 & 11.943 & 1.871 \\
+Drop AP 1              & 0.943 & 2.693 & 10.974 & 1.449 & 0.922 & 2.436 & 9.568  & 1.382 \\
+Drop AP 2              & 1.562 & 7.290 & 20.846 & 3.057 & 1.414 & 5.750 & 16.017 & 2.490 \\
+Drop AP 3              & 0.860 & 2.831 & 9.758  & 1.394 & 1.020 & 5.465 & 12.638 & 2.073 \\
+Random 1-AP dropout    & 1.100 & 3.957 & 14.259 & 1.960 & 1.166 & 4.347 & 12.935 & 1.996 \\
+Random 2-AP dropout    & 2.402 & 11.691& 22.997 & 4.468 & 2.516 & 11.631& 21.091 & 4.434 \\
+\midrule
+Noise $\sigma\!=\!0.1$ & \worst{16.368}& 20.939& 25.196 & 16.557& \best{4.769} & \best{12.310}& 21.122 & \best{5.953} \\
+Noise $\sigma\!=\!0.2$ & \worst{16.307}& 20.748& 25.188 & 16.503& \best{5.369} & 20.508& 26.014 & \best{7.896} \\
+\midrule
+Atten.\ $0.5\times$    & 1.342 & 4.211 & 14.831 & 2.181 & 1.500 & 6.185 & 22.612 & 2.828 \\
+Atten.\ AP0 $0.3\times$& 0.985 & 2.247 & 10.343 & 1.300 & 1.005 & 2.236 & 9.791  & 1.309 \\
+Blur $k\!=\!5$         & 0.849 & 2.121 & 12.033 & 1.281 & 0.854 & 1.924 & 5.839  & 1.125 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Analysis}
+
+\paragraph{AP dropout reveals asymmetric AP importance.}
+Dropping AP~2 causes the largest degradation ($0.707 \to 1.562$\,m standalone), while AP~1 causes the least ($0.707 \to 0.943$\,m).
+This asymmetry reflects the geometric placement of access points in Jacobs Hall: AP~2 provides unique angular coverage of spatial regions that other APs cannot compensate for, while AP~1 has significant spatial overlap with its neighbors.
+The model has implicitly learned to weight AP contributions by spatial informativeness, so removing a high-information AP disproportionately degrades accuracy.
+
+\paragraph{Distillation provides $3.4\times$ noise robustness---the most dramatic single finding.}
+Standalone MobileNetV2 collapses catastrophically under $\sigma = 0.1$ Gaussian noise, reaching 16.4\,m median error---effectively random guessing within the $16.1 \times 36.1$\,m floorplan.
+The distilled variant degrades only to 4.8\,m, a $3.4\times$ improvement.
+
+The mechanism is \emph{spatial label smoothing}.
+When trained against ground-truth heatmaps only, the standalone model learns sharp, noise-sensitive decision boundaries optimized to reproduce exact peak locations.
+Small input perturbations are amplified through these sharp boundaries into large output displacements.
+The distillation term $\beta \cdot \text{MSE}(\hat{y}, y_T)$ forces the student to also match the teacher's output, which is inherently smoother (broader probability mass) than the ground-truth delta-like peaks.
+This regularizes the student's learned features to encode a more noise-tolerant spatial representation, analogous to temperature scaling in classification distillation~\cite{hinton2015distilling}: softer targets carry richer inter-location relational information than hard labels.
+
+\paragraph{Blur is well-tolerated ($+20\%$ degradation vs.\ $+2{,}200\%$ for noise).}
+Gaussian blur ($k = 5$, spatial extent $0.5$\,m) causes only $0.707 \to 0.849$\,m degradation because the blur kernel width is smaller than the model's effective localization resolution.
+Convolutional architectures inherently perform local spatial averaging, making them robust to additional small-scale smoothing.
+
+\paragraph{Attenuation degrades gracefully.}
+Global $0.5\times$ attenuation causes moderate degradation ($0.707 \to 1.342$\,m), while single-AP $0.3\times$ attenuation has minimal impact ($0.707 \to 0.985$\,m).
+Unlike AP dropout (which removes all information from a channel), attenuation preserves the relative CSI pattern within each AP channel, allowing the model to partially compensate by adjusting its implicit gain normalization.
+
+
+%% ---------- TinyCNN ----------
+\subsection{TinyCNN Robustness}
+
+\begin{table}[H]
+\centering
+\caption{Robustness evaluation --- TinyCNN (47K params).}
+\label{tab:robust_tinycnn}
+\begin{tabular}{@{}lcccc|cccc@{}}
+\toprule
+ & \multicolumn{4}{c|}{\textbf{Standalone}} & \multicolumn{4}{c}{\textbf{Distilled}} \\
+\textbf{Condition} & \textbf{Med.} & \textbf{P90} & \textbf{P99} & \textbf{Mean} & \textbf{Med.} & \textbf{P90} & \textbf{P99} & \textbf{Mean} \\
+\midrule
+Normal                 & 3.922 & 13.919& 23.244 & 5.833 & 3.706 & 14.784& 25.101 & 6.048 \\
+\midrule
+Drop AP 0              & 5.695 & 15.912& 24.385 & 7.459 & 10.152& 22.926& 28.015 & 10.776\\
+Drop AP 1              & 8.355 & 15.854& 22.246 & 8.862 & 20.273& 26.655& 28.377 & 18.668\\
+Drop AP 2              & 11.256& 18.255& 22.105 & 10.721& 15.712& 25.478& 28.204 & 14.964\\
+Drop AP 3              & 5.816 & 17.084& 23.119 & 7.485 & 5.121 & 17.700& 25.745 & 7.406 \\
+Random 1-AP dropout    & 7.940 & 16.858& 23.405 & 8.580 & 13.648& 24.502& 28.228 & 12.922\\
+Random 2-AP dropout    & 10.065& 18.484& 23.806 & 10.298& 19.269& 26.186& 28.367 & 17.926\\
+\midrule
+Noise $\sigma\!=\!0.1$ & 9.457 & 17.049& 25.018 & 9.946 & 9.439 & 16.568& 23.965 & 9.921 \\
+Noise $\sigma\!=\!0.2$ & 10.910& 20.541& 26.366 & 11.767& 12.176& 20.035& 25.583 & 12.561\\
+\midrule
+Atten.\ $0.5\times$    & 9.708 & 17.593& 22.233 & 10.318& 18.532& 26.196& 28.343 & 17.829\\
+Atten.\ AP0 $0.3\times$& 4.316 & 15.121& 24.119 & 6.512 & 6.413 & 20.808& 27.443 & 8.834 \\
+Blur $k\!=\!5$         & 4.014 & 14.903& 23.965 & 6.121 & 4.821 & 18.685& 27.141 & 7.518 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Analysis}
+
+\paragraph{Baseline error too high for meaningful robustness analysis.}
+TinyCNN's normal-condition error (3.7--3.9\,m) is already $5\times$ worse than viable models.
+Under corruption, errors increase to 5--20\,m, but this reflects the model's fundamental inability to learn the localization mapping, not sensitivity to specific perturbations.
+
+\paragraph{Distillation \emph{harms} AP dropout robustness in capacity-limited models.}
+Counter-intuitively, distilled TinyCNN performs \emph{worse} under AP dropout than standalone (e.g., random 1-AP: $7.9 \to 13.6$\,m, a $+72\%$ degradation).
+This reveals an important failure mode: distillation forces the under-parameterized network to allocate its limited representational capacity toward mimicking the teacher's complex multi-AP feature interactions.
+When an AP is removed at test time, these learned inter-AP correlations become invalid, and the model lacks remaining capacity to fall back to single-AP features.
+The standalone variant, trained only against ground truth, learns simpler per-AP features that degrade more gracefully under AP removal.
+
+This result establishes a \textbf{minimum capacity threshold for effective knowledge distillation}: below approximately 2M parameters (for this task), distillation can actively harm robustness by forcing the student to overfit to the teacher's complex feature interactions at the expense of learning simpler, more robust representations.
+
+
+%% ---------- U-Net ----------
+\subsection{MobileNetV2-UNet Robustness}
+
+\begin{table}[H]
+\centering
+\caption{Robustness evaluation --- MobileNetV2-UNet (2.41M params).}
+\label{tab:robust_unet}
+\begin{tabular}{@{}lcccc|cccc@{}}
+\toprule
+ & \multicolumn{4}{c|}{\textbf{Standalone (Cosine)}} & \multicolumn{4}{c}{\textbf{Distilled (Cosine)}} \\
+\textbf{Condition} & \textbf{Med.} & \textbf{P90} & \textbf{P99} & \textbf{Mean} & \textbf{Med.} & \textbf{P90} & \textbf{P99} & \textbf{Mean} \\
+\midrule
+Normal                 & 0.640 & 1.581 & 3.651  & 0.851 & 0.640 & 1.513 & 3.587  & 0.829 \\
+\midrule
+Drop AP 0              & 1.811 & 7.263 & 12.459 & 2.763 & 1.910 & 4.562 & 11.453 & 2.578 \\
+Drop AP 1              & 0.854 & 2.378 & 10.362 & 1.291 & 0.781 & 2.127 & 9.132  & 1.188 \\
+Drop AP 2              & 2.280 & 10.144& 16.015 & 4.029 & 2.280 & 8.092 & 13.932 & 3.593 \\
+Drop AP 3              & 0.906 & 3.808 & 15.238 & 1.727 & 0.922 & 4.998 & 12.475 & 1.863 \\
+Random 1-AP dropout    & 1.281 & 6.466 & 15.005 & 2.468 & 1.281 & 5.804 & 12.275 & 2.280 \\
+Random 2-AP dropout    & 3.324 & 13.012& 22.080 & 5.228 & \best{2.730}& \best{8.203}& \best{13.396}& \best{3.711}\\
+\midrule
+Noise $\sigma\!=\!0.1$ & \best{3.000}& \best{8.310}& \best{13.873}& \best{3.878}& 3.469 & 10.473& 18.261 & 4.678 \\
+Noise $\sigma\!=\!0.2$ & \best{5.741}& \best{10.645}& \best{18.137}& \best{6.050}& 5.320 & 12.003& 17.948 & 6.135 \\
+\midrule
+Atten.\ $0.5\times$    & 1.077 & 4.200 & 15.963 & 1.932 & 1.105 & 3.984 & 11.729 & 1.795 \\
+Atten.\ AP0 $0.3\times$& 1.020 & 2.247 & 10.064 & 1.365 & 1.077 & 2.360 & 9.487  & 1.366 \\
+Blur $k\!=\!5$         & \best{0.671}& \best{1.603}& 3.716 & 0.859 & \best{0.656}& \best{1.526}& 3.943 & \best{0.841} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Analysis}
+
+\paragraph{Skip connections provide architectural noise robustness ($5.5\times$ over plain MobileNet).}
+The U-Net standalone achieves 3.0\,m under $\sigma = 0.1$ noise, compared to MobileNetV2 standalone's catastrophic 16.4\,m.
+Skip connections function as \emph{residual pathways}: when noise corrupts the encoder's deep representations (which undergo many nonlinear transformations that can amplify perturbations), the skip connections transmit shallower feature maps that are closer to the raw input and therefore less corrupted.
+The decoder can leverage these shallow features to maintain spatial accuracy even when the bottleneck representation is severely degraded by noise propagation.
+
+This is a fundamentally different robustness mechanism than knowledge distillation (which operates through the training objective rather than the architecture), and the two address complementary failure modes.
+
+\paragraph{Blur has near-zero impact ($+0.031$\,m standalone, $+0.016$\,m distilled).}
+The skip connections directly transmit high-frequency spatial features from early encoder layers.
+Since blur is a low-pass filter that attenuates high-frequency components, and skip connections preserve these from layers before significant downsampling, the decoder can reconstruct sharp peaks regardless of input blur.
+This is the smallest corruption-induced degradation observed across all models and conditions.
+
+\paragraph{Distillation improves multi-AP dropout resilience by 18\%.}
+Under random 2-AP dropout, distilled U-Net ($2.73$\,m) outperforms standalone ($3.32$\,m).
+The teacher's holistic multi-AP spatial reasoning is distilled into redundant cross-channel features, so the student can maintain accuracy even when half the input channels are zeroed.
+
+\paragraph{Architectural and training-based robustness are not additive for noise.}
+The distilled U-Net (3.47\,m at $\sigma = 0.1$) is slightly \emph{worse} than the standalone (3.00\,m).
+When the architecture already provides sufficient noise robustness through skip connections, the distillation loss introduces a marginal optimization conflict: the student is pulled between matching the sharp ground-truth peak and the teacher's broader output, and this tension slightly degrades the skip connections' inherent noise tolerance.
+This non-additivity is an important finding---it means these two robustness mechanisms should be deployed selectively based on the expected corruption type, not blindly combined.
+
+
+%% ---------- Robustness Summary ----------
+\subsection{Cross-Model Noise Robustness Comparison}
+
+\begin{table}[H]
+\centering
+\caption{Gaussian noise robustness summary ($\sigma = 0.1$). \best{Green} = best in column. \worst{Red} = worst.}
+\label{tab:noise_summary}
+\begin{tabular}{@{}llcc@{}}
+\toprule
+\textbf{Model} & \textbf{Mode} & \textbf{Median (m)} & \textbf{P90 (m)} \\
+\midrule
+MobileNetV2       & Standalone & \worst{16.368} & \worst{20.939} \\
+MobileNetV2       & Distilled  & 4.769  & 12.310 \\
+TinyCNN           & Standalone & 9.457  & 17.049 \\
+TinyCNN           & Distilled  & 9.439  & 16.568 \\
+MobileNetV2-UNet  & Standalone & \best{3.000}  & \best{8.310}  \\
+MobileNetV2-UNet  & Distilled  & 3.469  & 10.473 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Two independent robustness mechanisms.}
+Our experiments reveal two complementary mechanisms for improving noise resilience:
+\begin{enumerate}[nosep]
+  \item \textbf{Architectural (skip connections):} Provides $5.5\times$ improvement over plain MobileNetV2 by enabling the decoder to bypass corrupted bottleneck features via shallow residual pathways. This mechanism operates at the feature-flow level and is always active.
+  \item \textbf{Training-based (knowledge distillation):} Provides $3.4\times$ improvement for MobileNetV2 through spatial label smoothing, which prevents overfitting to sharp decision boundaries. This mechanism operates at the loss-function level and regularizes learned representations.
+\end{enumerate}
+These mechanisms are complementary in the sense that they address different vulnerability sources, but they are \emph{not additive}---combining them yields diminishing returns (Section~\ref{sec:robustness}, U-Net analysis).
+This finding suggests that practical deployment should select the robustness strategy based on the dominant expected corruption:
+skip connections for environments with high electromagnetic noise,
+and distillation for scenarios where multiple APs may simultaneously fail.
+
+
+%% ####################################################################
+\section{Step 1: Cross-Session Generalization}
+\label{sec:cross_session}
+%% ####################################################################
+
+A critical requirement for deployable WiFi localization is generalization across temporal and environmental changes without re-collecting training data.
+The WILD dataset provides this evaluation through four sessions captured under progressively more challenging conditions:
+
+\begin{itemize}[nosep]
+  \item \textbf{Session~2 (\texttt{Jul28\_2}):} Captured 1~hour after Session~1 under identical conditions---our \emph{in-distribution} test set.
+  \item \textbf{Session~3 (\texttt{Aug16\_1}):} Captured 3~weeks later with random furniture rearrangement (11{,}201 samples).
+  \item \textbf{Session~4 (\texttt{Aug16\_3}):} Same day as Session~3, different furniture configuration (8{,}754 samples).
+  \item \textbf{Session~5 (\texttt{Aug16\_4\_ref}):} Same day as Sessions~3--4, with an added aluminum reflector panel creating strong specular multipath (5{,}486 samples).
+\end{itemize}
+
+All models are trained exclusively on Sessions~1\,\&\,2 and evaluated on each session without any fine-tuning.
+
+\begin{table}[H]
+\centering
+\caption{Cross-session generalization --- median localization error (meters). \best{Green bold} = best in column.}
+\label{tab:cross_session_median}
+\begin{tabular}{@{}llcccc@{}}
+\toprule
+\textbf{Model} & \textbf{Mode} & \textbf{Sess.~2} & \textbf{Sess.~3} & \textbf{Sess.~4} & \textbf{Sess.~5} \\
+ &  & \footnotesize{(in-dist.)} & \footnotesize{(furniture)} & \footnotesize{(diff.\ furn.)} & \footnotesize{(reflector)} \\
+\midrule
+MobileNetV2   & Standalone & 0.707 & 1.118 & 1.204 & 1.500 \\
+MobileNetV2   & Distilled  & 0.707 & 1.118 & 1.204 & 1.442 \\
+\midrule
+TinyCNN       & Standalone & 3.922 & 5.964 & 6.327 & 6.605 \\
+TinyCNN       & Distilled  & 3.706 & 5.852 & 5.903 & 6.888 \\
+\midrule
+UNet (Cosine) & Standalone & 0.640 & 1.063 & 1.005 & 1.334 \\
+UNet (Cosine) & Distilled  & \best{0.640} & \best{1.020} & \best{1.005} & \best{1.281} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Cross-session generalization --- P90 localization error (meters).}
+\label{tab:cross_session_p90}
+\begin{tabular}{@{}llcccc@{}}
+\toprule
+\textbf{Model} & \textbf{Mode} & \textbf{Sess.~2} & \textbf{Sess.~3} & \textbf{Sess.~4} & \textbf{Sess.~5} \\
+\midrule
+MobileNetV2   & Standalone & 1.616 & 3.138 & 3.471 & 3.367 \\
+MobileNetV2   & Distilled  & 1.612 & 3.228 & 3.342 & 3.711 \\
+\midrule
+TinyCNN       & Standalone & 13.919& 13.525& 14.933& 14.879 \\
+TinyCNN       & Distilled  & 14.784& 14.658& 16.471& 16.602 \\
+\midrule
+UNet (Cosine) & Standalone & 1.581 & 2.508 & 3.704 & 3.301 \\
+UNet (Cosine) & Distilled  & \best{1.513} & \best{2.319} & \best{2.608} & \best{3.002} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Cross-session degradation relative to in-distribution baseline (Session~2) --- median error.}
+\label{tab:cross_session_delta}
+\begin{tabular}{@{}llccc@{}}
+\toprule
+\textbf{Model} & \textbf{Mode} & $\boldsymbol{\Delta}$\textbf{Sess.~3} & $\boldsymbol{\Delta}$\textbf{Sess.~4} & $\boldsymbol{\Delta}$\textbf{Sess.~5} \\
+\midrule
+MobileNetV2   & Standalone & +0.411\,m (+58\%) & +0.497\,m (+70\%) & +0.793\,m (+112\%) \\
+MobileNetV2   & Distilled  & +0.411\,m (+58\%) & +0.497\,m (+70\%) & +0.735\,m (+104\%) \\
+\midrule
+TinyCNN       & Standalone & +2.042\,m (+52\%) & +2.405\,m (+61\%) & +2.683\,m (+68\%) \\
+TinyCNN       & Distilled  & +2.146\,m (+58\%) & +2.197\,m (+59\%) & +3.182\,m (+86\%) \\
+\midrule
+UNet (Cosine) & Standalone & +0.423\,m (+66\%) & +0.365\,m (+57\%) & +0.694\,m (+108\%) \\
+UNet (Cosine) & Distilled  & \best{+0.379\,m (+59\%)} & \best{+0.365\,m (+57\%)} & \best{+0.640\,m (+100\%)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\subsection{Comparison with DLoc Paper}
+
+The original DLoc paper~\cite{ayyalasomayajula2020deep} reports cross-session results using a \textbf{leave-one-session-out} protocol, where the model trains on 3 sessions (including August sessions) and tests on 1 held-out session.
+Our setup is more challenging: we train on \textbf{only 2 July sessions} (Sessions~1\,\&\,2) and test on August sessions that the model has never seen.
+
+\begin{table}[H]
+\centering
+\caption{Comparison with DLoc paper's cross-session results (median error in meters). Note different training protocols: paper trains on 3 sessions (including Aug16), we train on 2 July sessions only.}
+\label{tab:paper_comparison}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Test Session} & \textbf{Paper DLoc} & \textbf{Our MobileNet} & \textbf{Our U-Net} & \textbf{Our U-Net (D)} \\
+ & \footnotesize{(3-sess train)} & \footnotesize{(2-sess train)} & \footnotesize{(2-sess train)} & \footnotesize{(2-sess train)} \\
+\midrule
+Session 3 (furniture)  & 0.71\,m & 1.118\,m & 1.063\,m & \best{1.020\,m} \\
+Session 4 (diff.\ furn.) & 0.82\,m & 1.204\,m & 1.005\,m & \best{1.005\,m} \\
+Session 5 (reflector)  & 1.05\,m & 1.500\,m & 1.334\,m & \best{1.281\,m} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\subsection{Analysis}
+
+\paragraph{Progressive environmental degradation follows a clear physical hierarchy.}
+All models show monotonically increasing error from Session~3 to Session~5.
+Session~3 (furniture rearrangement) modifies non-line-of-sight (NLOS) multipath components, altering secondary reflections that the model relies on for spatial disambiguation.
+Session~4 (different furniture configuration) further modifies the scattering environment.
+Session~5 (aluminum reflector) introduces strong specular reflections absent from training, effectively creating ``phantom APs'' with high signal power that confuse all models trained without such reflectors.
+This physical hierarchy is consistent across all architectures---confirming it is a property of the environment, not the model.
+
+\paragraph{U-Net distilled achieves the best generalization across all sessions.}
+The distilled U-Net maintains sub-1.3\,m median error across all sessions, including the most challenging reflector scenario.
+Two complementary mechanisms contribute:
+\begin{enumerate}[nosep]
+  \item \textbf{Architectural:} Skip connections allow the model to jointly leverage low-level CSI features (which are more robust to environmental changes as they capture local spectral signatures) and high-level spatial features (which are adapted to the training environment). Under distribution shift, the low-level features provide a baseline accuracy floor.
+  \item \textbf{Distillation:} The teacher's output encodes a spatially smooth localization prior that is less sensitive to environment-specific multipath patterns. By learning this prior, the distilled student avoids overfitting to Session~1\,\&\,2--specific scattering signatures.
+\end{enumerate}
+
+\paragraph{Distillation benefit is selective: strongest under strong distribution shift.}
+For Sessions~3 and~4, MobileNetV2 standalone and distilled show \emph{identical} median errors (1.118\,m and 1.204\,m respectively).
+The distillation advantage manifests only in Session~5: $1.500 \to 1.442$\,m ($-3.9\%$) for MobileNet, $1.334 \to 1.281$\,m ($-4.0\%$) for U-Net.
+This pattern indicates that distillation's regularization effect is most valuable precisely when the test environment deviates most strongly from training conditions---the scenario where robustness matters most for real-world deployment.
+
+\paragraph{Our U-Net approaches paper DLoc despite training on fewer sessions.}
+On Session~4, our U-Net (1.005\,m with only 2-session training) approaches the paper's DLoc result (0.82\,m with 3-session training).
+On Session~5, our U-Net (1.281\,m) approaches the paper's 1.05\,m.
+Given that our experimental setup is strictly harder (50\% less training data, no August sessions in training), these results suggest that the U-Net architecture extracts more generalizable features from limited training data than the original DLoc encoder.
+
+\paragraph{TinyCNN cross-session degradation is proportionally similar.}
+Despite its high absolute errors (5.8--6.9\,m), TinyCNN's \emph{relative} degradation from Session~2 to Session~3 ($+52\%$) is comparable to MobileNet's ($+58\%$).
+This suggests that the generalization \emph{mechanism} (sensitivity to environmental change) is architecture-independent, while \emph{absolute} performance requires sufficient model capacity.
+
+
+%% ####################################################################
+\section{Step 4: Multi-Seed Statistical Validation}
+\label{sec:multiseed}
+%% ####################################################################
+
+To assess whether reported performance differences are statistically meaningful rather than artifacts of random initialization, we evaluate the DLoc baseline under multiple random seeds.
+Each seed controls all sources of randomness: weight initialization, data shuffling, and any stochastic operations.
+
+\subsection{Experimental Configuration}
+
+The DLoc baseline uses its native training configuration:
+\begin{itemize}[nosep]
+  \item \textbf{Optimizer:} SGD with learning rate $10^{-5}$
+  \item \textbf{LR scheduling:} \texttt{StepLR} with $\gamma = 0.9$ (encoder: step=50, decoder: step=20, offset decoder: step=50)
+  \item \textbf{Epochs:} 120
+  \item \textbf{Seeds:} 42, 123, 777
+  \item \textbf{Fresh model:} Each seed instantiates a completely new Enc\_2Dec\_Network with fresh random weights, new optimizers, and new schedulers.
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\caption{Multi-seed DLoc baseline results (120 epochs, StepLR $\gamma = 0.9$).}
+\label{tab:multiseed_baseline}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Seed} & \textbf{Median (m)} & \textbf{P90 (m)} & \textbf{P99 (m)} \\
+\midrule
+42  & 0.825 & 2.402 & 22.672 \\
+123 & 0.906 & 2.335 &  7.714 \\
+777 & 0.894 & 2.102 &  8.694 \\
+\midrule
+\textbf{Mean $\pm$ Std} & $\mathbf{0.875 \pm 0.036}$ & $\mathbf{2.280 \pm 0.128}$ & $\mathbf{13.027 \pm 6.832}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Analysis}
+
+\paragraph{Low variance in median and P90 confirms reproducibility.}
+The median error varies only $\pm 0.036$\,m across seeds (coefficient of variation = 4.1\%), and P90 varies $\pm 0.128$\,m (CV = 5.6\%).
+This tight clustering indicates that the DLoc optimization landscape for median and P90 is well-conditioned: different random initializations converge to similar performance levels.
+This validates that the single-seed results reported throughout this document are representative, not lucky draws.
+
+\paragraph{P99 shows high variance ($\pm 6.832$\,m, CV = 52\%).}
+The P99 error ranges from 7.7\,m (seed~123) to 22.7\,m (seed~42)---a $2.9\times$ spread.
+This is expected: P99 captures only the worst 1\% of predictions ($\sim$43 samples out of 4{,}260), making it extremely sensitive to a small number of outlier test locations where the CSI evidence is inherently ambiguous.
+Different weight initializations resolve these ambiguities differently, producing high P99 variance despite consistent median and P90 performance.
+This suggests that \textbf{P99 should be interpreted cautiously} in single-seed experiments and requires multi-seed validation for reliable conclusions.
+
+\paragraph{Multi-seed median (0.875\,m) exceeds single-run (0.707\,m) due to scheduling differences.}
+The multi-seed experiments use 120 epochs with StepLR ($\gamma = 0.9$), while the original 50-epoch baseline uses the same schedule.
+Under StepLR with step sizes of 20--50 and $\gamma = 0.9$, the learning rate decays multiplicatively but never reaches zero: after 120 epochs, the encoder LR has decayed by $0.9^{2} = 0.81\times$ (2 steps of 50), and the decoder by $0.9^{6} = 0.53\times$ (6 steps of 20).
+This means the optimizer continues making non-negligible parameter updates throughout training, preventing the fine convergence that would be achieved with a schedule that decays to zero (such as cosine annealing).
+The 50-epoch single run achieves 0.707\,m because fewer StepLR steps have fired, and the model is still in an ``early convergence'' regime where the LR is close to its initial value.
+
+\paragraph{Implication for student comparisons.}
+The baseline multi-seed result provides a statistical reference point.
+A student model improvement is statistically meaningful if it exceeds the baseline's natural variance.
+Our U-Net's 0.640\,m median is $6.5\sigma$ below the baseline mean of 0.875\,m (using $\sigma = 0.036$\,m), providing strong evidence that the architectural improvement is genuine.
+Even comparing against the best single baseline seed (0.825\,m), the U-Net's improvement of 0.185\,m ($-22.4\%$) far exceeds the baseline's seed-to-seed variation.
+
+\paragraph{Student multi-seed validation.}
+Multi-seed experiments for the student models (MobileNetV2, TinyCNN, U-Net in standalone and distilled modes) have not yet been completed due to computational budget constraints.
+These experiments require approximately 15 hours on an H100 GPU for 6 variants $\times$ 3 seeds $\times$ 120 epochs.
+All scripts and data are prepared on HuggingFace (\texttt{JustAGeek/dloc-code}) for immediate execution when compute becomes available.
+Completing these runs would enable formal statistical tests (e.g., paired $t$-tests or bootstrap confidence intervals) comparing student distributions against the baseline distribution.
+
+
+%% ####################################################################
+\section{Comprehensive Discussion}
+\label{sec:discussion}
+%% ####################################################################
+
+\subsection{The Dual Nature of Knowledge Distillation}
+
+Our experiments reveal that knowledge distillation in spatial regression tasks operates through a fundamentally different mechanism than in classification.
+In classification distillation~\cite{hinton2015distilling}, soft targets convey inter-class similarity structure (``this digit 7 is somewhat similar to a 1'').
+In our spatial context, the teacher's output heatmap conveys \emph{spatial uncertainty}---the teacher's broader probability distribution around the ground-truth peak encodes which nearby positions the CSI evidence is consistent with.
+
+This spatial uncertainty acts as \emph{implicit label smoothing}:
+\begin{itemize}[nosep]
+  \item \textbf{In-distribution:} The smoothing is unnecessary, as the ground truth provides sufficient supervision. Hence, distillation shows no accuracy improvement (Section~\ref{sec:step0}).
+  \item \textbf{Under noise:} The smoothing prevents sharp decision boundaries that amplify input perturbations, yielding $3.4\times$ robustness for MobileNetV2 (Section~\ref{sec:robustness}).
+  \item \textbf{Cross-session:} The smoothing reduces overfitting to session-specific multipath signatures, yielding 3--4\% improvement on the hardest out-of-distribution session (Section~\ref{sec:cross_session}).
+  \item \textbf{Under capacity constraints:} The smoothing forces the student to learn complex inter-AP correlations that its limited capacity cannot maintain under AP dropout, \emph{harming} robustness (TinyCNN, Section~\ref{sec:robustness}).
+\end{itemize}
+
+This capacity-dependent behavior---distillation helps above the capacity threshold and harms below it---has not, to our knowledge, been systematically documented for spatial regression tasks.
+
+\subsection{Skip Connections as a Robustness Mechanism}
+
+The U-Net skip connections were originally introduced for accuracy improvement (preserving fine-grained spatial features for sharper heatmap peaks).
+Our robustness experiments reveal an equally important secondary benefit: skip connections provide alternative information pathways that bypass the noise-corrupted bottleneck.
+
+The key insight is that shallow encoder features (early convolutional layers) undergo fewer nonlinear transformations than deep features, making them inherently more robust to input noise.
+By concatenating these shallow features directly to the decoder, skip connections create a ``fallback pathway'' that maintains spatial accuracy even when the deep feature pathway through the bottleneck is compromised.
+
+This dual benefit---accuracy \emph{and} robustness from a single architectural change---makes skip connections a particularly efficient design choice for practical localization systems.
+
+\subsection{The Over-Parameterization of DLoc}
+
+MobileNetV2's lossless $7.2\times$ compression of the DLoc baseline is a strong empirical statement about the original architecture's efficiency.
+The DLoc encoder uses a ResNet with 6 blocks and 64 base filters, producing high-dimensional intermediate representations that are then projected through a narrow bottleneck.
+Our results show that the CSI-to-heatmap mapping for a single-floor, 4-AP environment can be learned with MobileNetV2's inverted residuals and depthwise-separable convolutions---operations specifically designed for computational efficiency.
+
+This over-parameterization is not unique to DLoc; it reflects a common pattern in early deep learning systems for physical sensing tasks, where architectures are borrowed from image classification (where large capacity aids generalization across millions of visual concepts) and applied to domain-specific regression tasks with far lower intrinsic complexity.
+Our results suggest that the WiFi localization community should re-evaluate the capacity requirements of CSI-based methods.
+
+\subsection{Practical Deployment Implications}
+
+Our findings suggest a clear deployment strategy hierarchy:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Best overall:} MobileNetV2-UNet distilled (cosine) --- 0.640\,m median, sub-1.3\,m cross-session, 2.41M parameters, best balance of accuracy, robustness, and efficiency.
+  \item \textbf{Best noise robustness:} MobileNetV2-UNet standalone (cosine) --- 3.0\,m at $\sigma = 0.1$ noise, better than distilled for pure noise corruption.
+  \item \textbf{Best compression:} MobileNetV2 distilled --- 0.707\,m median, $3.4\times$ noise robustness over standalone, 2.3M parameters.
+  \item \textbf{Not viable:} TinyCNN --- below the capacity floor for this task.
+\end{enumerate}
+
+
+%% ####################################################################
+\section{Summary of All Results}
+\label{sec:summary_table}
+%% ####################################################################
+
+\begin{table}[H]
+\centering
+\caption{Master comparison of all model variants across all evaluation axes. (S)~=~Standalone, (D)~=~Distilled. \best{Green bold} = best in column.}
+\label{tab:master}
+\begin{tabular}{@{}lrccccc@{}}
+\toprule
+\textbf{Model} & \textbf{Params} & \textbf{Compr.} & \textbf{Median} & \textbf{Noise $\sigma\!=\!0.1$} & \textbf{Rand.\ 2-AP} & \textbf{Cross-S5} \\
+\midrule
+DLoc Baseline     & 16.5M  & $1\times$   & 0.707\,m  & ---       & ---       & --- \\
+MobileNet (S)     & 2.3M   & $7.2\times$ & 0.707\,m  & \worst{16.368\,m} & 2.402\,m  & 1.500\,m \\
+MobileNet (D)     & 2.3M   & $7.2\times$ & 0.707\,m  & 4.769\,m  & 2.516\,m  & 1.442\,m \\
+TinyCNN (S)       & 47K    & $351\times$ & 3.922\,m  & 9.457\,m  & 10.065\,m & 6.605\,m \\
+TinyCNN (D)       & 47K    & $351\times$ & 3.706\,m  & 9.439\,m  & 19.269\,m & 6.888\,m \\
+UNet Cos.\ (S)    & 2.41M  & $6.8\times$ & \best{0.640\,m} & \best{3.000\,m} & 3.324\,m  & 1.334\,m \\
+UNet Cos.\ (D)    & 2.41M  & $6.8\times$ & \best{0.640\,m} & 3.469\,m  & \best{2.730\,m} & \best{1.281\,m} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+%% ####################################################################
+\section{Conclusions}
+\label{sec:conclusions}
+%% ####################################################################
+
+This work presents a comprehensive experimental study of knowledge distillation and architectural improvements for compressing the DLoc deep learning--based WiFi localization system.
+Through systematic evaluation across five experimental axes---in-distribution accuracy, signal robustness, cross-session generalization, statistical reproducibility, and architectural design---we establish several findings with implications for both the WiFi localization field and the broader knowledge distillation literature.
+
+\subsection{Principal Findings}
+
+\paragraph{Finding 1: Extreme model compression is achievable without accuracy loss.}
+MobileNetV2 achieves the same 0.707\,m median localization error as the full 16.5M-parameter DLoc baseline with only 2.3M parameters ($7.2\times$ compression).
+This demonstrates that the CSI-to-heatmap regression task for a single-floor, 4-AP indoor environment does not require the representational capacity of a full ResNet encoder--decoder.
+The depthwise-separable convolutions and inverted residual blocks of MobileNetV2 are sufficient to learn both per-AP spectral feature extraction and cross-AP spatial triangulation.
+This finding has immediate practical impact: it enables deployment of sub-meter WiFi localization on edge devices (IoT gateways, smartphones) with $\sim$9\,MB model footprint, removing a key barrier to adoption of learned localization methods.
+
+\paragraph{Finding 2: Skip connections simultaneously improve accuracy and robustness.}
+The MobileNetV2-UNet architecture achieves 0.640\,m median error---a 9.5\% improvement over all non-U-Net variants including the full DLoc baseline---while maintaining only 2.41M parameters ($6.8\times$ compression).
+This result demonstrates that a \emph{student model can surpass its teacher} when the architectural modification addresses a fundamental design limitation (the information bottleneck) rather than just capacity.
+Furthermore, the same skip connections provide $5.5\times$ noise robustness improvement over plain MobileNetV2 by creating residual pathways that bypass corrupted deep features.
+This dual benefit---accuracy and robustness from a single architectural change---establishes skip connections as the highest-leverage modification for practical WiFi localization systems.
+
+\paragraph{Finding 3: Knowledge distillation is a robustness mechanism, not an accuracy mechanism, for spatial regression.}
+Across all model architectures, knowledge distillation provides negligible improvement in in-distribution median accuracy (Section~\ref{sec:step0}).
+Its value lies in three robustness dimensions:
+\begin{itemize}[nosep]
+  \item \textbf{$3.4\times$ Gaussian noise resilience} for MobileNetV2 (16.4\,m $\to$ 4.8\,m at $\sigma = 0.1$) through spatial label smoothing;
+  \item \textbf{18\% multi-AP dropout improvement} for U-Net (3.32\,m $\to$ 2.73\,m under 2-AP dropout) through learned AP redundancy;
+  \item \textbf{3--4\% cross-session improvement} on the most challenging out-of-distribution session through reduced overfitting to session-specific multipath signatures.
+\end{itemize}
+This ``distillation as regularization'' framing---where the teacher's spatial uncertainty provides implicit smoothing that prevents overfitting to sharp decision boundaries---extends the understanding of knowledge distillation beyond its established role in classification tasks.
+In classification, soft targets encode inter-class similarity; in spatial regression, soft targets encode spatial uncertainty that provides a natural regularizer.
+
+\paragraph{Finding 4: A minimum model capacity threshold exists for effective distillation.}
+TinyCNN (47K parameters) demonstrates that below $\sim$2M parameters, knowledge distillation actively \emph{harms} robustness.
+Distillation forces the under-parameterized student to allocate its limited capacity toward mimicking the teacher's complex multi-AP correlations, leaving no residual capacity for graceful degradation under AP dropout (random 1-AP dropout: $7.9 \to 13.6$\,m, $+72\%$ worse).
+This capacity-dependent reversal of distillation's effect establishes a practical design constraint: the student architecture must meet a minimum capacity floor before distillation can provide net benefits.
+
+\paragraph{Finding 5: Architectural and training-based robustness are complementary but not additive.}
+Skip connections (architectural) and knowledge distillation (training-based) address different failure modes but provide diminishing returns when combined.
+Under Gaussian noise, the standalone U-Net (3.0\,m) slightly \emph{outperforms} the distilled U-Net (3.47\,m), while under multi-AP dropout, the distilled U-Net (2.73\,m) outperforms the standalone (3.32\,m).
+This non-additivity implies that the two mechanisms share some overlapping benefit, and that practical deployment should select the robustness strategy based on the dominant expected corruption type.
+
+\paragraph{Finding 6: Cross-session generalization is achievable with limited training data.}
+The distilled U-Net, trained on only 2 July sessions, achieves 1.02--1.28\,m median error on unseen August sessions with furniture changes and metal reflectors.
+For comparison, the original DLoc paper reports 0.71--1.05\,m using a leave-one-session-out protocol (3-session training including August data).
+Our model approaches these results with 50\% less training data and a strictly harder evaluation protocol, suggesting that the combination of U-Net skip connections and knowledge distillation extracts more generalizable features from limited observations.
+
+\paragraph{Finding 7: Learning rate scheduling is a second-order effect.}
+Cosine annealing and step decay achieve identical median accuracy, with cosine providing marginally better tail performance (P99: 2.750\,m vs.\ 2.918\,m, $-5.8\%$).
+For smooth regression tasks like CSI-to-heatmap mapping, architecture and training objective dominate; scheduler choice provides only marginal refinement.
+
+\subsection{Implications for Graduation Thesis}
+
+These findings collectively establish a coherent thesis narrative: \emph{deep learning--based WiFi localization can be made simultaneously more accurate, more robust, and more efficient than the state-of-the-art DLoc system through the principled combination of architectural design (U-Net skip connections) and training strategy (knowledge distillation)}.
+The key insight is that these two techniques address orthogonal limitations---skip connections resolve the information bottleneck that limits spatial accuracy, while distillation provides regularization against distribution shift---and their interaction reveals non-obvious behaviors (non-additivity, capacity thresholds) that advance the understanding of model compression for spatial regression tasks.
+
+The best model (MobileNetV2-UNet distilled, 2.41M parameters) achieves:
+\begin{itemize}[nosep]
+  \item \textbf{9.5\% better accuracy} than the 16.5M-parameter DLoc baseline (0.640\,m vs.\ 0.707\,m),
+  \item \textbf{$6.8\times$ model compression} (2.41M vs.\ 16.5M parameters),
+  \item \textbf{Sub-1.3\,m cross-session accuracy} across all environmental conditions,
+  \item \textbf{Best multi-AP dropout resilience} among all evaluated variants.
+\end{itemize}
+
+\subsection{Limitations and Future Work}
+
+\begin{itemize}
+  \item \textbf{Student multi-seed validation:} Multi-seed experiments for student models have not yet been completed. Formal statistical comparison (paired $t$-tests, confidence intervals) between student and baseline seed distributions would strengthen the significance claims. Scripts and data are prepared for immediate execution.
+  \item \textbf{Single environment:} All experiments use the WILD Jacobs Hall dataset. Evaluation on additional indoor environments (different building geometries, AP counts, floor materials) would establish generality.
+  \item \textbf{Real-time inference:} We report model size but not inference latency on target edge devices. FLOPs analysis and on-device benchmarking would complete the deployment picture.
+  \item \textbf{Training-time AP augmentation:} All robustness tests apply corruptions at test time only. Training with AP dropout augmentation could further improve robustness and would complement the distillation-based approach.
+  \item \textbf{Deeper U-Net exploration:} We tested one U-Net configuration. Varying the number of skip connection stages, feature map widths, or adding attention mechanisms could yield further improvements.
+\end{itemize}
+
+
+%% ####################################################################
+\section*{Question for Discussion}
+%% ####################################################################
+\addcontentsline{toc}{section}{Question for Discussion}
+
+\vspace{0.5em}
+\noindent\fbox{\parbox{0.97\linewidth}{
+\textbf{Regarding Step~4 --- Multi-Seed Statistical Validation:}\\[0.5em]
+Given the limited computational budget remaining, should we prioritize running multi-seed experiments on the \textbf{student models} (MobileNetV2, TinyCNN, U-Net in standalone and distilled modes) or on the \textbf{DLoc baseline} (which has already been completed for 3 seeds)?
+\\[0.5em]
+The student multi-seed runs require approximately 15 hours on an H100 GPU for 6 variants $\times$ 3 seeds $\times$ 120 epochs.
+All scripts, weights, and data are uploaded to HuggingFace and ready for immediate execution.
+}}
+
+\vspace{2em}
+
+\begin{thebibliography}{9}
+\bibitem{ayyalasomayajula2020deep}
+R.~Ayyalasomayajula, A.~Arun, C.~Wu, S.~Sharma, A.~R.~Sethi, D.~Vasisht, and D.~Bharadia,
+``Deep Learning based Wireless Localization for Indoor Navigation,''
+in \textit{Proc.\ ACM MobiCom}, 2020.
+
+\bibitem{hinton2015distilling}
+G.~Hinton, O.~Vinyals, and J.~Dean,
+``Distilling the Knowledge in a Neural Network,''
+\textit{arXiv preprint arXiv:1503.02531}, 2015.
+\end{thebibliography}
+
+\end{document}

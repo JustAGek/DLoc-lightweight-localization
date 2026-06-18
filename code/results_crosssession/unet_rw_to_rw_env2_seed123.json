@@ -1,0 +1,12 @@
+{
+  "model": "unet",
+  "env": "rw_to_rw_env2",
+  "seed": 123,
+  "epochs": 120,
+  "n_params": 2409217,
+  "best_median": 0.806225774829855,
+  "best_p90": 1.8439088914585777,
+  "best_p99": 5.021951811795889,
+  "best_epoch": 53,
+  "run_dir": "./runs/unet_rw_to_rw_env2_seed123_2026-06-17-11-27-27"
+}
