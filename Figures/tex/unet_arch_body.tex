@@ -1,0 +1,53 @@
+% ============================================================================
+%  MobileNetV2-UNet architecture — \input-able body (no \documentclass).
+%  Requires in the master preamble: \usepackage{tikz} and
+%  \usetikzlibrary{positioning, arrows.meta, calc}.  Colours are defined here
+%  so the figure is self-contained.  Layer specs from code/models/student_unet.py.
+% ============================================================================
+\definecolor{cEnc}{RGB}{142,202,230}
+\definecolor{cBottle}{RGB}{33,102,172}
+\definecolor{cDec}{RGB}{69,123,157}
+\definecolor{cHead}{RGB}{188,108,37}
+\definecolor{cSkip}{RGB}{42,157,143}
+\definecolor{cIO}{RGB}{230,57,70}
+
+\begin{tikzpicture}[
+  font=\small,
+  >={Stealth[length=2.4mm]},
+  block/.style={rectangle, rounded corners=2pt, draw=black!70, thick,
+                minimum height=11mm, minimum width=13mm, align=center,
+                text=white, font=\footnotesize\bfseries},
+  enc/.style={block, fill=cEnc, text=black},
+  bottle/.style={block, fill=cBottle},
+  dec/.style={block, fill=cDec},
+  head/.style={block, fill=cHead},
+  io/.style={rectangle, rounded corners=1pt, draw=black!70, thick,
+             minimum height=13mm, minimum width=12mm, align=center,
+             fill=cIO!12, font=\footnotesize},
+  flow/.style={->, black!75, thick},
+  skipline/.style={->, cSkip, very thick, dashed},
+]
+\node[io] (in) {Input\\$4{\times}161{\times}361$};
+\node[enc,    right=7mm of in]  (inc) {inc\\$4{\to}32$\\/2};
+\node[enc,    right=6mm of inc] (e1)  {enc1\\$24$};
+\node[enc,    right=6mm of e1]  (e2)  {enc2\\$32$};
+\node[enc,    right=6mm of e2]  (e3)  {enc3\\$96$};
+\node[bottle, right=6mm of e3]  (e4)  {enc4\\$320$};
+\node[dec,  right=11mm of e4] (d1) {dec1\\$416{\to}128$};
+\node[dec,  right=6mm of d1]  (d2) {dec2\\$160{\to}64$};
+\node[dec,  right=6mm of d2]  (d3) {dec3\\$88{\to}32$};
+\node[head, right=6mm of d3]  (hd) {head\\$32{\to}1$\\Sigmoid};
+\node[io,   right=7mm of hd]  (out) {Output\\$1{\times}161{\times}361$};
+\draw[flow] (in)--(inc); \draw[flow] (inc)--(e1); \draw[flow] (e1)--(e2);
+\draw[flow] (e2)--(e3);  \draw[flow] (e3)--(e4);  \draw[flow] (e4)--(d1);
+\draw[flow] (d1)--(d2);  \draw[flow] (d2)--(d3);  \draw[flow] (d3)--(hd);
+\draw[flow] (hd)--(out);
+\draw[skipline] (e3.north) to[out=90,in=90]
+      node[above,font=\tiny,text=cSkip]{skip 96} (d1.north);
+\draw[skipline] (e2.north) to[out=90,in=90]
+      node[above,font=\tiny,text=cSkip]{skip 32} (d2.north);
+\draw[skipline] (e1.north) to[out=90,in=90]
+      node[above,font=\tiny,text=cSkip]{skip 24} (d3.north);
+\node[text=black!60, font=\scriptsize, below=3mm of e2.south] {MobileNetV2 encoder (pretrained, 4-ch input)};
+\node[text=black!60, font=\scriptsize, below=3mm of d2.south] {U-Net decoder (upsample $+$ skip concat)};
+\end{tikzpicture}

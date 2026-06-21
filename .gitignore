@@ -62,3 +62,6 @@ dloc_run/
 
 # Superseded scratch scripts (fixed versions in code/)
 stand alon/
+
+# local Claude Code config
+.claude/
