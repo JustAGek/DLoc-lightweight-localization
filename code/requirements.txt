@@ -1,6 +1,25 @@
-easydict>=1.9
-h5py>=3.1.0
-hdf5storage>=0.1.15
+# Dependencies for the DLoc compression project.
+#   pip install -r requirements.txt
+# Note: PyTorch is best installed from the official index matching your CUDA build (see bottom).
+
+torch>=2.1            # trained on torch 2.12.0+cu130 (H100); any recent 2.x works on CPU / other GPUs
+torchvision>=0.16     # must match the torch build (see note below)
 numpy>=1.21.0
 scipy>=1.7.0
+h5py>=3.1.0           # reads the HDF5 (.mat v7.3) WILD feature files
+hdf5storage>=0.1.15
+easydict>=1.9         # config objects (params.py)
 scikit-learn
+huggingface_hub       # download weights / data from the Hub
+matplotlib>=3.5       # figure generation (code/figures/) only
+
+# --- Mamba student ONLY (not needed for baseline / MobileNetV2 / TinyCNN / U-Net) ---
+# CUDA-only; build against your exact torch build:
+#   pip install mamba-ssm --no-deps
+#   pip install causal-conv1d
+
+# --- Install notes (the H100 training environment) ---
+# Python 3.13, torch 2.12.0+cu130.
+# If torch/torchvision mismatch, reinstall torchvision against the same CUDA build:
+#   pip install torchvision --force-reinstall --index-url https://download.pytorch.org/whl/cu130 --no-deps
+# Mamba run uses batch size 32 (not 64) to fit in memory.
