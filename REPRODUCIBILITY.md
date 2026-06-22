@@ -13,6 +13,80 @@ through.
 
 ---
 
+## Quick start: reproduce from the three sources
+
+Reproduction uses all three public artifacts together: the **code** (this GitHub repo), the **dataset**
+(HF `JustAGeek/dloc-wild-fig10b`), and the **trained weights** (HF `JustAGeek/dloc-code`). Everything is
+run from the `code/` folder; the eval scripts read data from `./data/` and weights from `./weights/`.
+
+### 1. One-time setup
+
+```bash
+git clone https://github.com/JustAGek/DLoc-lightweight-localization.git
+cd DLoc-lightweight-localization/code
+pip install -r requirements.txt                       # + the Mamba extras (below) only for Mamba
+
+# dataset (HF) -> code/data/
+huggingface-cli download JustAGeek/dloc-wild-fig10b --repo-type dataset --local-dir data
+# trained weights (HF) -> code/weights/  (so the eval scripts' ./weights/... paths resolve)
+huggingface-cli download JustAGeek/dloc-code --repo-type model --include "weights/*" --local-dir .
+
+# cross-session runs only: create the train_ symlinks (see CROSSSESSION_RUNBOOK.md)
+cd data && ln -s dataset_jacobs_Aug16_1.mat dataset_train_jacobs_Aug16_1.mat \
+        && ln -s dataset_jacobs_Aug16_3.mat dataset_train_jacobs_Aug16_3.mat \
+        && ln -s dataset_jacobs_Aug16_4_ref.mat dataset_train_jacobs_Aug16_4_ref.mat && cd ..
+```
+
+### 2. Verify the published results — no GPU training (uses the downloaded weights)
+
+Set the two CONFIG variables at the top of the eval script (exact values in the table), then run it.
+
+```bash
+# Robustness tables + the in-distribution "Normal" row, per model:
+#   evaluation/test_robustness.py  ->  set MODEL_TYPE and WEIGHTS_PATH
+python evaluation/test_robustness.py
+# Zero-shot cross-session (a trained model evaluated on the August sessions):
+#   evaluation/eval_cross_session.py  ->  set MODEL_TYPE and WEIGHTS_PATH
+python evaluation/eval_cross_session.py
+# Efficiency table (needs no data or weights; dummy input):
+python evaluation/benchmark_models.py
+```
+
+| Model / mode | `MODEL_TYPE` | `WEIGHTS_PATH` |
+|---|---|---|
+| MobileNetV2 standalone  | `'mobilenet'` | `./weights/mobilenet_standalone_best.pth` |
+| MobileNetV2 distilled   | `'mobilenet'` | `./weights/mobilenet_distill_best.pth` |
+| TinyCNN standalone      | `'tinycnn'`   | `./weights/tinycnn_standalone_best.pth` |
+| TinyCNN distilled       | `'tinycnn'`   | `./weights/tinycnn_distill_best.pth` |
+| U-Net cosine standalone | `'unet'`      | `./weights/unet_cosine_standalone_best.pth` |
+| U-Net step standalone   | `'unet'`      | `./weights/unet_step_standalone_best.pth` |
+| U-Net cosine distilled  | `'unet'`      | `./weights/unet_cosine_distill_best.pth` |
+
+The DLoc baseline weights are `baseline_{encoder,decoder,offset_decoder}_best.pth`; the baseline is
+re-evaluated through `training/train_and_test.py` (and its 3-seed run via `run_multiseed_baseline.py`).
+
+### 3. Retrain from scratch (needs a GPU)
+
+```bash
+python training/precompute_teacher.py                 # required before any distilled run
+
+# In-distribution accuracy (Table 5.1):
+cp configs/params_storage/params_fig10b_single_gpu.py configs/params.py && python training/train_and_test.py   # DLoc baseline
+cp configs/params_storage/params_mamba_single_gpu.py  configs/params.py && python training/train_and_test.py   # Mamba
+python training/train_distillation.py     # students: set STUDENT_TYPE ('mobilenet'|'tinycnn') and MODE ('standalone'|'distill')
+python training/train_unet_advanced.py    # U-Net: set SCHEDULER_TYPE ('cosine'|'step') and MODE ('standalone'|'distill')
+
+# Cross-session LOSO — 3 folds x 3 seeds, then aggregate (Sec 5.4):
+bash training/run_crosssession_table1.sh && python evaluation/aggregate_table1.py
+# Multi-seed DLoc baseline — seeds 42/123/777 (Table 5.7):
+python training/run_multiseed_baseline.py
+```
+
+The full result → script → output mapping for each individual table and figure is in the
+**Result → code map** and **Exact commands** sections below.
+
+---
+
 ## Data & artifacts — what lives where
 
 The data and artifacts from this research are split between two locations based on their size. Small

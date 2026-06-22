@@ -89,12 +89,17 @@ the WILD Jacobs data). The code, trained models, and training logs are available
 **`JustAGeek/dloc-code`**. The results and weights for the cross-session experiment are under
 `JustAGeek/dloc-code/crosssession_official/`.
 
-Download the model code with:
+Both repos are public. From the `code/` folder, fetch the dataset into `./data/` and the trained
+weights into `./weights/` (the evaluation scripts read from exactly these paths):
 
-```python
-from huggingface_hub import snapshot_download
-snapshot_download("JustAGeek/dloc-code", repo_type="model", local_dir="./dloc-code")
+```bash
+huggingface-cli download JustAGeek/dloc-wild-fig10b --repo-type dataset --local-dir data
+huggingface-cli download JustAGeek/dloc-code --repo-type model --include "weights/*" --local-dir .
 ```
+
+See [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md) for the full clone → download → run walkthrough — for
+every run, either verify the published result without retraining (using the weights above) or retrain
+from scratch.
 
 ## Reproduce the official cross-session experiment
 
@@ -104,7 +109,7 @@ snapshot_download("JustAGeek/dloc-code", repo_type="model", local_dir="./dloc-co
 
 ```bash
 cd code
-# download the feature files
+huggingface-cli download JustAGeek/dloc-wild-fig10b --repo-type dataset --local-dir data
 # create the symlinks for the train_ environments (see CROSSSESSION_RUNBOOK.md)
 
 # run the experiment for a single fold and seed
