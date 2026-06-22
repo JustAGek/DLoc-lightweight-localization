@@ -95,6 +95,13 @@ def get_models():
     from student_tinycnn import TinyCNNStudent
     models['TinyCNN Student'] = TinyCNNStudent(input_nc=4)
 
+    # MobileNetV2-UNet Student (skip-connection variant, our headline model)
+    try:
+        from student_unet import MobileNetUNetStudent
+        models['MobileNetV2-UNet Student'] = MobileNetUNetStudent(input_nc=4)
+    except Exception as e:
+        print(f'Could not load U-Net: {e}')
+
     # DLoc Baseline (encoder + decoder only, test-time config)
     try:
         from Generators import ResnetEncoder, ResnetDecoder

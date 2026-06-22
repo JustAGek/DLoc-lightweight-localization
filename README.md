@@ -126,7 +126,7 @@ Dependencies: `torch`, `torchvision`, `h5py`, `easydict`, `hdf5storage`, `scipy`
   of each other are effectively equal.
 - All data was collected in a single building (Jacobs), so cross-building localization is outside the
   scope of this project and the data is unavailable.
-- The Mamba model was omitted from the results due to its poor performance (flattening the 2D heatmaps
+- The Mamba model is reported but excluded from the main analysis due to its poor performance (flattening the 2D heatmaps
   into a 1D sequence destroys spatial locality). It is included to provide a complete survey of the
   models and results.
 

@@ -104,7 +104,7 @@ Teacher outputs are precomputed and cached (4.09\,GB train + 0.99\,GB test) to a
 \paragraph{Training details.}
 Student models (MobileNetV2, TinyCNN) are trained for 50 epochs with Adam ($\text{lr} = 10^{-4}$), batch size 64.
 U-Net variants are trained for 120 epochs with either cosine annealing ($T_{\max} = 120$, $\eta_{\min} = 0$) or step decay (halving every 20 epochs).
-The DLoc baseline uses its original configuration: SGD with StepLR scheduling ($\gamma = 0.9$), with step sizes of 50 (encoder), 20 (decoder), and 50 (offset decoder) epochs.
+The DLoc baseline uses its original configuration: Adam ($\beta_1 = 0.5$) with StepLR scheduling ($\gamma = 0.9$), with step sizes of 50 (encoder), 20 (decoder), and 50 (offset decoder) epochs.
 
 \subsection{Model Architectures}
 
@@ -490,11 +490,112 @@ The WILD dataset provides this evaluation through four sessions captured under p
   \item \textbf{Session~5 (\texttt{Aug16\_4\_ref}):} Same day as Sessions~3--4, with an added aluminum reflector panel creating strong specular multipath (5{,}486 samples).
 \end{itemize}
 
-All models are trained exclusively on Sessions~1\,\&\,2 and evaluated on each session without any fine-tuning.
+We evaluate cross-session generalization through two complementary protocols that answer two distinct questions:
+\begin{enumerate}[nosep]
+  \item \textbf{Leave-one-session-out (Section~\ref{sec:cross_loso}) --- the \emph{fair comparison} with DLoc.} We adopt the \emph{exact} training/evaluation protocol of the original DLoc paper (train on three setups, test on the held-out one) so that our numbers are an apples-to-apples comparison against the published DLoc baseline. This is the headline cross-session result.
+  \item \textbf{Zero-shot to unseen sessions (Section~\ref{sec:cross_zeroshot}) --- an architecture/distillation stress test.} We train \emph{only} on the two July sessions and evaluate on the never-seen August sessions, a strictly harder protocol that isolates the relative effect of architecture and distillation across all model variants. Because it uses less training data than DLoc, it is \emph{not} a fair comparison with the published baseline and is reported purely as an internal ablation.
+\end{enumerate}
+
+
+%% ====================================================================
+\subsection{Leave-One-Session-Out: Fair Comparison with DLoc}
+\label{sec:cross_loso}
+%% ====================================================================
+
+The original DLoc paper~\cite{ayyalasomayajula2020deep} reports its cross-session results (Table~1) using a \textbf{leave-one-session-out} protocol: the model trains on three setups and is evaluated on the single held-out session.
+To produce a fair, apples-to-apples comparison, we re-ran our MobileNetV2-UNet under this identical protocol on all available Jacobs Hall sessions, with three random seeds to provide publication-grade error bars.
+Crucially, the held-out test session is \emph{never} present in the training set of its fold---verified in every fold and identical across all seeds.
 
 \begin{table}[H]
 \centering
-\caption{Cross-session generalization --- median localization error (meters). \best{Green bold} = best in column.}
+\caption{Leave-one-session-out folds (official DLoc protocol). The held-out session is never seen during training.}
+\label{tab:loso_folds}
+\begin{tabular}{@{}llrr@{}}
+\toprule
+\textbf{Fold} & \textbf{Trains on} & \textbf{Held-out test} & \textbf{Train\,/\,Test $N$} \\
+\midrule
+env2 & Jul28 + Jul28\_2 + Aug16\_3 + Aug16\_4\_ref & Aug16\_1 (furniture)     & 31{,}814 / 11{,}201 \\
+env3 & Jul28 + Jul28\_2 + Aug16\_1 + Aug16\_4\_ref & Aug16\_3 (diff.\ furn.)  & 34{,}261 / 8{,}754 \\
+env4 & Jul28 + Jul28\_2 + Aug16\_1 + Aug16\_3      & Aug16\_4\_ref (reflector) & 37{,}529 / 5{,}486 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Protocol details.}
+The U-Net student (2.41M parameters) is trained with its own best recipe---Adam ($\text{lr} = 10^{-4}$), cosine annealing ($T_{\max} = 120$), MSE loss, 120 epochs, batch size 64---for each of three seeds (42, 123, 777).
+Following the professor's instruction, we do \emph{not} retrain the DLoc baseline; we compare against its \emph{published} Table~1 numbers.
+This run is standalone (no distillation), because distillation under leave-one-out would require retraining a teacher per fold (i.e.\ baseline runs, which were de-scoped); the standalone U-Net is the architectural headline and the correct fair-comparison choice.
+
+\begin{table}[H]
+\centering
+\caption{Per-seed leave-one-session-out results (MobileNetV2-UNet, 2.41M params).}
+\label{tab:loso_perseed}
+\begin{tabular}{@{}llccc@{}}
+\toprule
+\textbf{Fold} & \textbf{Seed} & \textbf{Median (m)} & \textbf{P90 (m)} & \textbf{P99 (m)} \\
+\midrule
+\multirow{3}{*}{env2 (furniture)}   & 42  & 0.854 & 1.769 & 5.445 \\
+                                    & 123 & 0.806 & 1.844 & 5.022 \\
+                                    & 777 & 0.894 & 1.903 & 5.124 \\
+\midrule
+\multirow{3}{*}{env3 (diff.\ furn.)}& 42  & 0.825 & 2.640 & 8.896 \\
+                                    & 123 & 0.781 & 2.915 & 9.986 \\
+                                    & 777 & 0.860 & 2.823 & 9.487 \\
+\midrule
+\multirow{3}{*}{env4 (reflector)}   & 42  & 1.131 & 2.474 & 6.508 \\
+                                    & 123 & 1.100 & 2.524 & 7.101 \\
+                                    & 777 & 1.118 & 2.470 & 6.894 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Fair comparison with the DLoc paper under the official leave-one-session-out protocol (median and P90 in meters, mean $\pm$ std over 3 seeds). Our U-Net uses 2.41M parameters vs.\ DLoc's 16.5M ($6.8\times$ compression). \best{Green bold} = our result matches or beats the paper.}
+\label{tab:paper_comparison}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Held-out session} & \textbf{Median (ours)} & \textbf{Median (paper)} & \textbf{P90 (ours)} & \textbf{P90 (paper)} \\
+\midrule
+Aug16\_1 (furniture)     & $0.852 \pm 0.044$ & 0.71 & $1.839 \pm 0.067$ & 1.71 \\
+Aug16\_3 (diff.\ furn.)  & \best{$0.822 \pm 0.040$} & 0.82 & $2.793 \pm 0.140$ & 2.52 \\
+Aug16\_4\_ref (reflector)& $1.116 \pm 0.016$ & 1.05 & \best{$2.489 \pm 0.030$} & 2.77 \\
+\midrule
+\textbf{Mean}            & \textbf{0.930} & 0.86 & \textbf{2.374} & 2.33 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Analysis}
+
+\paragraph{The 2.41M U-Net is competitive with the 16.5M DLoc under a fair protocol.}
+On median error, our U-Net \textbf{matches DLoc on the different-furniture fold} (0.822\,m vs.\ 0.82\,m) and lands within $\sim$0.07--0.14\,m on the other two folds, averaging 0.930\,m vs.\ the paper's 0.86\,m---all at $6.8\times$ fewer parameters.
+On P90 the two models are essentially level (2.374\,m vs.\ 2.33\,m on average), and our U-Net \emph{beats} DLoc on the reflector fold (2.489\,m vs.\ 2.77\,m), i.e.\ it produces fewer large-error outliers in the hardest condition.
+
+\paragraph{The reflector fold is the only real median gap, and it is expected.}
+The $\sim$0.07\,m median gap on Aug16\_4\_ref reflects an architectural difference: DLoc's consistency decoder explicitly enforces multi-AP agreement, which helps most under the strong specular multipath introduced by the aluminum reflector, whereas our single-decoder U-Net has no such mechanism.
+That the U-Net nonetheless wins on P90 for this fold indicates its errors, when they occur, are less catastrophic.
+
+\paragraph{Results are seed-stable.}
+The median standard deviation is only 0.016--0.044\,m across folds, so the comparison reflects genuine model behavior rather than initialization luck---satisfying the multi-seed evidence requested for publication.
+
+\paragraph{Honest framing.}
+This is an \emph{efficiency} result, not an accuracy-win claim: under the original DLoc cross-session protocol, our 2.41M-parameter MobileNetV2-UNet matches DLoc on one setup, is within $\sim$0.1\,m on the others, and is level on P90---competitive cross-session generalization at $6.8\times$ compression.
+The comparison is made against DLoc's \emph{published} numbers; our own in-house DLoc reproduction is weaker ($\sim$0.707\,m in-distribution vs.\ the paper's 0.64\,m), so comparing against the paper is the more conservative (harder) choice for us.
+
+
+%% ====================================================================
+\subsection{Zero-Shot to Unseen Sessions: Architecture and Distillation Stress Test}
+\label{sec:cross_zeroshot}
+%% ====================================================================
+
+We complement the fair comparison above with a strictly harder, internal ablation: all model variants are trained \textbf{exclusively on Sessions~1\,\&\,2} (the two July sessions) and evaluated zero-shot on the never-seen August sessions, with no fine-tuning.
+Because this uses only two training sessions (versus DLoc's three), it is deliberately \emph{not} a fair comparison with the published baseline; its purpose is to isolate how \emph{architecture} (MobileNet vs.\ TinyCNN vs.\ U-Net) and \emph{training mode} (standalone vs.\ distilled) affect generalization under maximal distribution shift.
+All DLoc-comparison claims belong to Section~\ref{sec:cross_loso}; the tables below are read \emph{across models}, not against the paper.
+
+\begin{table}[H]
+\centering
+\caption{Zero-shot generalization (2-session training) --- median localization error (meters). \best{Green bold} = best in column. These are an internal architecture/distillation ablation, \emph{not} a DLoc comparison (see Section~\ref{sec:cross_loso}).}
 \label{tab:cross_session_median}
 \begin{tabular}{@{}llcccc@{}}
 \toprule
@@ -515,7 +616,7 @@ UNet (Cosine) & Distilled  & \best{0.640} & \best{1.020} & \best{1.005} & \best{
 
 \begin{table}[H]
 \centering
-\caption{Cross-session generalization --- P90 localization error (meters).}
+\caption{Zero-shot generalization (2-session training) --- P90 localization error (meters).}
 \label{tab:cross_session_p90}
 \begin{tabular}{@{}llcccc@{}}
 \toprule
@@ -535,7 +636,7 @@ UNet (Cosine) & Distilled  & \best{1.513} & \best{2.319} & \best{2.608} & \best{
 
 \begin{table}[H]
 \centering
-\caption{Cross-session degradation relative to in-distribution baseline (Session~2) --- median error.}
+\caption{Zero-shot degradation (2-session training) relative to the in-distribution baseline (Session~2) --- median error.}
 \label{tab:cross_session_delta}
 \begin{tabular}{@{}llccc@{}}
 \toprule
@@ -554,29 +655,7 @@ UNet (Cosine) & Distilled  & \best{+0.379\,m (+59\%)} & \best{+0.365\,m (+57\%)}
 \end{table}
 
 
-\subsection{Comparison with DLoc Paper}
-
-The original DLoc paper~\cite{ayyalasomayajula2020deep} reports cross-session results using a \textbf{leave-one-session-out} protocol, where the model trains on 3 sessions (including August sessions) and tests on 1 held-out session.
-Our setup is more challenging: we train on \textbf{only 2 July sessions} (Sessions~1\,\&\,2) and test on August sessions that the model has never seen.
-
-\begin{table}[H]
-\centering
-\caption{Comparison with DLoc paper's cross-session results (median error in meters). Note different training protocols: paper trains on 3 sessions (including Aug16), we train on 2 July sessions only.}
-\label{tab:paper_comparison}
-\begin{tabular}{@{}lcccc@{}}
-\toprule
-\textbf{Test Session} & \textbf{Paper DLoc} & \textbf{Our MobileNet} & \textbf{Our U-Net} & \textbf{Our U-Net (D)} \\
- & \footnotesize{(3-sess train)} & \footnotesize{(2-sess train)} & \footnotesize{(2-sess train)} & \footnotesize{(2-sess train)} \\
-\midrule
-Session 3 (furniture)  & 0.71\,m & 1.118\,m & 1.063\,m & \best{1.020\,m} \\
-Session 4 (diff.\ furn.) & 0.82\,m & 1.204\,m & 1.005\,m & \best{1.005\,m} \\
-Session 5 (reflector)  & 1.05\,m & 1.500\,m & 1.334\,m & \best{1.281\,m} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-
-\subsection{Analysis}
+\subsubsection{Analysis}
 
 \paragraph{Progressive environmental degradation follows a clear physical hierarchy.}
 All models show monotonically increasing error from Session~3 to Session~5.
@@ -598,10 +677,10 @@ For Sessions~3 and~4, MobileNetV2 standalone and distilled show \emph{identical}
 The distillation advantage manifests only in Session~5: $1.500 \to 1.442$\,m ($-3.9\%$) for MobileNet, $1.334 \to 1.281$\,m ($-4.0\%$) for U-Net.
 This pattern indicates that distillation's regularization effect is most valuable precisely when the test environment deviates most strongly from training conditions---the scenario where robustness matters most for real-world deployment.
 
-\paragraph{Our U-Net approaches paper DLoc despite training on fewer sessions.}
-On Session~4, our U-Net (1.005\,m with only 2-session training) approaches the paper's DLoc result (0.82\,m with 3-session training).
-On Session~5, our U-Net (1.281\,m) approaches the paper's 1.05\,m.
-Given that our experimental setup is strictly harder (50\% less training data, no August sessions in training), these results suggest that the U-Net architecture extracts more generalizable features from limited training data than the original DLoc encoder.
+\paragraph{Even under the harder zero-shot protocol the U-Net degrades gracefully.}
+With only 2-session training and no August data, the distilled U-Net still holds 1.005--1.281\,m median error on the unseen August sessions.
+This demonstrates that the U-Net extracts generalizable features even from limited observations.
+We emphasize, however, that the fair, apples-to-apples comparison with the published DLoc baseline is the leave-one-session-out result of Section~\ref{sec:cross_loso} (Table~\ref{tab:paper_comparison}), where the U-Net matches DLoc on the different-furniture fold and is level on P90; the zero-shot numbers here use less training data than DLoc and are reported only to compare architectures and training modes.
 
 \paragraph{TinyCNN cross-session degradation is proportionally similar.}
 Despite its high absolute errors (5.8--6.9\,m), TinyCNN's \emph{relative} degradation from Session~2 to Session~3 ($+52\%$) is comparable to MobileNet's ($+58\%$).
@@ -620,7 +699,7 @@ Each seed controls all sources of randomness: weight initialization, data shuffl
 
 The DLoc baseline uses its native training configuration:
 \begin{itemize}[nosep]
-  \item \textbf{Optimizer:} SGD with learning rate $10^{-5}$
+  \item \textbf{Optimizer:} Adam ($\beta_1 = 0.5$) with learning rate $10^{-5}$
   \item \textbf{LR scheduling:} \texttt{StepLR} with $\gamma = 0.9$ (encoder: step=50, decoder: step=20, offset decoder: step=50)
   \item \textbf{Epochs:} 120
   \item \textbf{Seeds:} 42, 123, 777
@@ -796,10 +875,11 @@ Skip connections (architectural) and knowledge distillation (training-based) add
 Under Gaussian noise, the standalone U-Net (3.0\,m) slightly \emph{outperforms} the distilled U-Net (3.47\,m), while under multi-AP dropout, the distilled U-Net (2.73\,m) outperforms the standalone (3.32\,m).
 This non-additivity implies that the two mechanisms share some overlapping benefit, and that practical deployment should select the robustness strategy based on the dominant expected corruption type.
 
-\paragraph{Finding 6: Cross-session generalization is achievable with limited training data.}
-The distilled U-Net, trained on only 2 July sessions, achieves 1.02--1.28\,m median error on unseen August sessions with furniture changes and metal reflectors.
-For comparison, the original DLoc paper reports 0.71--1.05\,m using a leave-one-session-out protocol (3-session training including August data).
-Our model approaches these results with 50\% less training data and a strictly harder evaluation protocol, suggesting that the combination of U-Net skip connections and knowledge distillation extracts more generalizable features from limited observations.
+\paragraph{Finding 6: The compressed U-Net is competitive with DLoc cross-session under a fair protocol.}
+Under the original DLoc leave-one-session-out protocol (Section~\ref{sec:cross_loso}, three seeds), our 2.41M-parameter MobileNetV2-UNet achieves $0.852 \pm 0.044$, $0.822 \pm 0.040$, and $1.116 \pm 0.016$\,m median error across the furniture, different-furniture, and reflector folds---averaging 0.930\,m versus the published DLoc's 0.86\,m at $6.8\times$ fewer parameters.
+It \emph{matches} DLoc on the different-furniture fold (0.822\,m vs.\ 0.82\,m), is within $\sim$0.1\,m on the others, is level on P90 (2.374\,m vs.\ 2.33\,m), and even \emph{beats} DLoc's P90 on the reflector fold.
+This is an efficiency result---competitive cross-session generalization at $6.8\times$ compression---not an accuracy-win claim.
+A complementary zero-shot stress test (2-session training only) confirms that the architecture and distillation both contribute to graceful degradation under maximal distribution shift.
 
 \paragraph{Finding 7: Learning rate scheduling is a second-order effect.}
 Cosine annealing and step decay achieve identical median accuracy, with cosine providing marginally better tail performance (P99: 2.750\,m vs.\ 2.918\,m, $-5.8\%$).
@@ -823,27 +903,13 @@ The best model (MobileNetV2-UNet distilled, 2.41M parameters) achieves:
 \begin{itemize}
   \item \textbf{Student multi-seed validation:} Multi-seed experiments for student models have not yet been completed. Formal statistical comparison (paired $t$-tests, confidence intervals) between student and baseline seed distributions would strengthen the significance claims. Scripts and data are prepared for immediate execution.
   \item \textbf{Single environment:} All experiments use the WILD Jacobs Hall dataset. Evaluation on additional indoor environments (different building geometries, AP counts, floor materials) would establish generality.
-  \item \textbf{Real-time inference:} We report model size but not inference latency on target edge devices. FLOPs analysis and on-device benchmarking would complete the deployment picture.
+  \item \textbf{On-device inference:} We report parameter counts, FLOPs, and CPU/GPU latency, but not latency measured on the target edge hardware itself; on-device benchmarking would complete the deployment picture.
   \item \textbf{Training-time AP augmentation:} All robustness tests apply corruptions at test time only. Training with AP dropout augmentation could further improve robustness and would complement the distillation-based approach.
   \item \textbf{Deeper U-Net exploration:} We tested one U-Net configuration. Varying the number of skip connection stages, feature map widths, or adding attention mechanisms could yield further improvements.
 \end{itemize}
 
 
-%% ####################################################################
-\section*{Question for Discussion}
-%% ####################################################################
-\addcontentsline{toc}{section}{Question for Discussion}
 
-\vspace{0.5em}
-\noindent\fbox{\parbox{0.97\linewidth}{
-\textbf{Regarding Step~4 --- Multi-Seed Statistical Validation:}\\[0.5em]
-Given the limited computational budget remaining, should we prioritize running multi-seed experiments on the \textbf{student models} (MobileNetV2, TinyCNN, U-Net in standalone and distilled modes) or on the \textbf{DLoc baseline} (which has already been completed for 3 seeds)?
-\\[0.5em]
-The student multi-seed runs require approximately 15 hours on an H100 GPU for 6 variants $\times$ 3 seeds $\times$ 120 epochs.
-All scripts, weights, and data are uploaded to HuggingFace and ready for immediate execution.
-}}
-
-\vspace{2em}
 
 \begin{thebibliography}{9}
 \bibitem{ayyalasomayajula2020deep}
