@@ -81,43 +81,49 @@ training runs) are likewise not published — they are roughly 5 GB
 | Result tables / summaries | ✅ `reports/`, `results_crosssession/` | — | ✅ `results/` |
 | Figure data + figures | ✅ `Figures/` | — | — |
 
-### Which data each run needs
+### Which data each run needs, and exactly how to get it
 
-Each experiment and model that was trained and tested in this research used the data described below,
-all published on the Hugging Face dataset repository (`JustAGeek/dloc-wild-fig10b`).
+**Get everything in one step.** Every data file lives on the public Hugging Face dataset repo
+`JustAGeek/dloc-wild-fig10b`. Download the whole repo into `code/data/`:
 
-- **In-distribution accuracy (baseline, Mamba, MobileNetV2, TinyCNN, U-Net):** the data from the
-  in-distribution July training and test sessions was used (17,574 training samples, 4,260 test
-  samples). The baseline, Mamba, and U-Net models used only the in-distribution data for training. The
-  MobileNetV2 and TinyCNN models additionally used the in-distribution test data during the
-  distillation stage.
-- **Robustness:** the same in-distribution July training and test data was used. Additionally, the
-  test data from the in-distribution sessions was corrupted at test time to evaluate the robustness of
-  each model (without retraining the models).
-- **Cross-session LOSO (3 folds):** the in-distribution July dataset was used, as well as two of the
-  three August cross-session datasets (for 3 trained models; each has three seeds for training).
-- **Zero-shot cross-session:** the in-distribution July dataset was trained with the models, but
-  tested with the August cross-session datasets.
+```bash
+huggingface-cli download JustAGeek/dloc-wild-fig10b --repo-type dataset --local-dir code/data
+# Python equivalent:
+#   from huggingface_hub import snapshot_download
+#   snapshot_download("JustAGeek/dloc-wild-fig10b", repo_type="dataset", local_dir="code/data")
+```
 
-### Notes on where the data is located
+That single download provides **all 8 feature files plus the split indices** (verified present on the
+Hub). The table says which of them each run actually reads — all paths are relative to the download
+above.
 
-- The files containing the index data for each of the sessions on the Hugging Face dataset repository
-  are located in the `dloc-wild-fig10b/data_split_idx/` folder: the `data_split_ids_jacobs_*.mat`
-  files contain each session's train and test data indices.
-- The cross-session data on the Hugging Face dataset repository does not ship with the `train_`
-  prefixes that the cross-session fold lists expect. For example, `dataset_train_jacobs_Aug16_1.mat`
-  is required but is published as `dataset_jacobs_Aug16_1.mat`. The train sessions with the proper
-  prefixes can be created as symlinks to the original data using the procedure documented in
-  `code/CROSSSESSION_RUNBOOK.md`.
-- In addition to the dataset files, the training data is preprocessed differently per model. The
-  baseline DLoc model requires the features from the WILD data that do **not** have the offset maps
-  applied (`features_wo_offset`). The U-Net model requires the features that **do** have the offset
-  maps applied (`features_w_offset`) and the labels for the 2D Gaussian distributions of the samples
-  (`labels_gaussian_2d`).
-- The in-distribution July 28 `fov` and `non_fov` split files are not published on Hugging Face. The
-  original files are located in the [`DLoc_pt_code`](https://github.com/JustAGeek/DLoc_pt_code)
-  repository in its `data/` folder, or can be regenerated using the `prepare_cross_session_data.py`
-  script in the `data_prep/` folder of this repository.
+| Run | Exact files it reads (HF `dloc-wild-fig10b`) |
+|---|---|
+| **In-distribution** (baseline, Mamba, MobileNetV2, TinyCNN, U-Net) | `data/dataset_jacobs_July28.mat`, `data/dataset_fov_train_jacobs_July28_2.mat`, `data/dataset_non_fov_train_jacobs_July28_2.mat`, `data/dataset_fov_test_jacobs_July28_2.mat`, `data/dataset_non_fov_test_jacobs_July28_2.mat` |
+| **Teacher precompute** (distillation prep) | the same five July files, then run `precompute_teacher.py` |
+| **Robustness** | `data/dataset_fov_test_jacobs_July28_2.mat`, `data/dataset_non_fov_test_jacobs_July28_2.mat` (corrupted at test time; no retraining) |
+| **Multi-seed baseline** | the same five July files |
+| **Cross-session LOSO** (3 folds × 3 seeds) | the five July files **plus** `data/dataset_jacobs_Aug16_1.mat`, `data/dataset_jacobs_Aug16_3.mat`, `data/dataset_jacobs_Aug16_4_ref.mat`, and `data_split_idx/data_split_ids_jacobs_Aug16_{1,3,4_ref}.mat` |
+| **Zero-shot cross-session** | the five July files (train) **plus** the three `data/dataset_jacobs_Aug16_*.mat` (test) |
+
+**Two setup steps for the cross-session runs only:**
+
+1. **Create the `train_` symlinks.** The August files ship as `dataset_jacobs_Aug16_*.mat`, but the
+   fold lists expect a `train_` prefix (full steps in `code/CROSSSESSION_RUNBOOK.md`):
+   ```bash
+   cd code/data
+   ln -s dataset_jacobs_Aug16_1.mat     dataset_train_jacobs_Aug16_1.mat
+   ln -s dataset_jacobs_Aug16_3.mat     dataset_train_jacobs_Aug16_3.mat
+   ln -s dataset_jacobs_Aug16_4_ref.mat dataset_train_jacobs_Aug16_4_ref.mat
+   ```
+2. **Variable check.** Each `.mat` contains `features_w_offset` + `labels_gaussian_2d` (used by every
+   model) and `features_wo_offset` (additionally required by the baseline's consistency decoder).
+
+**Nothing is missing for reproduction.** All eight feature files — including the July `fov`/`non_fov`
+splits — are confirmed on the Hub, so every result in the thesis can be reproduced from the Hub plus
+this code. The only data *not* published anywhere is `raw_channels/` (the raw CSI, ~2.8 GB), and it is
+**not needed**: it is the input to the MATLAB feature-generation stage, whose output is exactly the
+`.mat` files above. You would only need `raw_channels/` to re-run feature generation from scratch.
 
 ---
 
